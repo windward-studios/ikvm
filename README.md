@@ -23,4 +23,4 @@ Make sure that
 <supportedRuntime version="v2.0.50727" />
 ```
 
-is listed first in the <startup> section.
+is listed first in the `<startup>` section.
