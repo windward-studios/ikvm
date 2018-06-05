@@ -88,7 +88,7 @@
                 <include name="System.Core.jar" />
                 <include name="System.Data.jar" />
                 <include name="System.Drawing.jar" />
-		<include name="System.Xml.jar" />
+                <include name="System.Xml.jar" />
             </fileset>
         </delete>
         <exec program="${project::get-base-directory()}/../bin/ikvmstub.exe" commandline="-bootstrap mscorlib" useruntimeengine="true" />
@@ -99,7 +99,7 @@
         </if>
         <exec program="${project::get-base-directory()}/../bin/ikvmstub.exe" commandline="-bootstrap System.Data" useruntimeengine="true" />
         <exec program="${project::get-base-directory()}/../bin/ikvmstub.exe" commandline="-bootstrap System.Drawing" useruntimeengine="true" />
-	<exec program="${project::get-base-directory()}/../bin/ikvmstub.exe" commandline="-bootstrap System.Xml" useruntimeengine="true" />
+        <exec program="${project::get-base-directory()}/../bin/ikvmstub.exe" commandline="-bootstrap System.Xml" useruntimeengine="true" />
         <property name="IKVM.Runtime" value="IKVM.Runtime" />
         <if test="${signoption != ''}">
             <loadfile file="../tools/pubkey.txt" property="publickey" />
