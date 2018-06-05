@@ -2,29 +2,18 @@
 
 ## Build
 
-See HOWTO for the build instructions.  A note on using NAnt.  It didn't work
-out of the box and few changes were needed to NAnt.exe.config.
+See HOWTO for the build instructions.
 
-Replace the line
+**A note on using NAnt**.  If you encounter a System.Security.SecurityException
+while running nant, apply the following fix.
 
-```xml
-<section name="nant" type="NAnt.Core.ConfigurationSection, NAnt.Core" />
-```
+From [stackoverflow](https://stackoverflow.com/questions/8605122/how-do-i-resolve-configuration-errors-with-nant-0-91)
 
-with
-
-```xml
-<section name="nant" type="NAnt.Core.ConfigurationSection, NAnt.Core" requirePermission="false" />
-```
-
-Make sure that
-
-```xml
-<supportedRuntime version="v2.0.50727" />
-```
-
-is listed first in the `<startup>` section.
-
+> I found that the problem was Windows security related in that the downloaded
+> NAnt zip file needed additional security related configuration to be performed:
+> before extracting, one must right click on the zip file, select Properties and
+> under the General tab, click the button labelled Unblock, the click OK on the
+> Properties window.  Now, extract the file to your desired location.
 
 To build a debug version of IKVM assemblies, execute
 
