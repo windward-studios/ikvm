@@ -24,3 +24,8 @@ Make sure that
 ```
 
 is listed first in the `<startup>` section.
+
+
+To build a debug version of IKVM assemblies, execute
+
+```nant -D:debug=true```

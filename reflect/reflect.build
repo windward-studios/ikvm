@@ -1,7 +1,14 @@
 <?xml version="1.0"?>
 <project name="reflect" default="IKVM.Reflection">
+    <property name="debugoption" value="None" />
+    <if test="${property::exists('debug') and debug}">
+        <property name="debugoption" value="Enable" />
+    </if>
     <target name="IKVM.Reflection">
         <property name="defs" value="TRACE" />
+        <if test="${property::exists('debug') and debug}">
+            <property name="defs" value="${defs};DEBUG" />
+        </if>
         <if test="${framework::exists('mono-2.0')}">
             <property name="defs" value="${defs};MONO" />
         </if>
@@ -16,7 +23,7 @@
         <if test="${framework::exists('mono-2.0')}">
             <property name="MonoSymbolWriter" value="${path::combine(framework::get-assembly-directory('mono-2.0'), 'Mono.CompilerServices.SymbolWriter.dll')}" />
         </if>
-        <csc target="library" output="../bin/IKVM.Reflection.dll" optimize="true" define="${defs}">
+        <csc target="library" output="../bin/IKVM.Reflection.dll" optimize="true" define="${defs}" debug="${debugoption}">
             <sources>
                 <include name="../CommonAssemblyInfo.cs" />
                 <include name="AmbiguousMatchException.cs" />

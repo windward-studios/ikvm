@@ -6,6 +6,10 @@
     <property overwrite="false" name="SkipSystemCoreDependency" value="false" />
     <property name="OPENJDK_VERSION" value="OpenJDK 7u6 b24" />
     <property name="OpenJDK7.dir" value="${project::get-base-directory()}/../../openjdk-7u6-b24" />
+    <property name="debugoption" value="" />
+    <if test="${property::exists('debug') and debug}">
+        <property name="debugoption" value="-debug" />
+    </if>
     <if test="${platform::is-win32()}">
         <property name="pathsep" value=";" />
     </if>
@@ -198,6 +202,7 @@
         <copy file="../bin/IKVM.AWT.WinForms.dll" todir="." />
         <exec program="${project::get-base-directory()}/../bin/ikvmc.exe" useruntimeengine="true">
             <arg value="-version:${VERSION}" />
+            <arg value="${debugoption}" />
             <arg value="${signoption}" />
             <arg value="-compressresources" />
             <arg value="-opt:fields" />
@@ -244,6 +249,13 @@
                 <include name="IKVM.OpenJDK.*.dll" />
             </fileset>
         </copy>
+        <if test="${property::exists('debug') and debug}">
+            <copy todir="../bin">
+                <fileset basedir=".">
+                    <include name="IKVM.OpenJDK.*.pdb" />
+                </fileset>
+            </copy>
+        </if>
         <!-- update base addresses in response.txt for next build -->
         <exec program="${project::get-base-directory()}/../tools/updbaseaddresses.exe" commandline="response.txt" useruntimeengine="true" />
 
