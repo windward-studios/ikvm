@@ -5,6 +5,9 @@ bin/*.dll
 bin/*.exe
 bin/*.pdb
 
+bin-x64/jvm.dll
+bin-x86/jvm.dll
+
 lib/*.jar
 
 classpath/**/*.class

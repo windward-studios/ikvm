@@ -2,7 +2,9 @@
 
 ## Build
 
-See HOWTO for the build instructions.
+See HOWTO for the build instructions.  The quick start is
+
+- Install NAnt (https://sourceforge.net/projects/nant/files/nant/0.92/).
 
 **A note on using NAnt**.  If you encounter a System.Security.SecurityException
 while running nant, apply the following fix.
@@ -15,6 +17,18 @@ From [stackoverflow](https://stackoverflow.com/questions/8605122/how-do-i-resolv
 > under the General tab, click the button labelled Unblock, the click OK on the
 > Properties window.  Now, extract the file to your desired location.
 
-To build a debug version of IKVM assemblies, execute
+- Must be set to use JDK 7 (not 8 or later).
+
+- Download ICSharpCode.SharpZipLib.dll (http://www.icsharpcode.net/opensource/sharpziplib/) and copy to the bin folder.
+
+- Download openjdk-7u6-b24 (https://sourceforge.net/projects/ikvm/files/ikvm/7.2.4630.5/) and unpack in the peer folder to ikvm.
+
+- In the root folder run nant.
+
+```nant```
+
+Produces a release build.
 
 ```nant -D:debug=true```
+
+Produces a debug build with all. pdb files in the bin folder.
