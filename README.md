@@ -32,3 +32,10 @@ Produces a release build.
 ```nant -D:debug=true```
 
 Produces a debug build with all. pdb files in the bin folder.
+
+## Package NuGet
+
+- build the project as normal
+- from the nuget directory run these commands
+- nant IKVM.nuspec
+- nant nupkg
