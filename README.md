@@ -33,6 +33,16 @@ Produces a release build.
 
 Produces a debug build with all. pdb files in the bin folder.
 
+- To produce the strongly named assemblies
+
+Add the ikvm-key.snk to the key container
+
+```sn.exe -i ikvm-key.snk ikvm-key```
+
+And run nant
+
+```nant signed```
+
 ## Package NuGet
 
 - build the project as normal
