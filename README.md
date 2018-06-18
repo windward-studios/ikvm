@@ -45,7 +45,7 @@ And run nant
 
 ## Package NuGet
 
-- build the project as normal
+- build a signed version of the project
 - from the nuget directory run these commands
 - nant IKVM.nuspec
 - nant nupkg
