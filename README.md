@@ -49,3 +49,11 @@ And run nant
 - from the nuget directory run these commands
 - nant IKVM.nuspec
 - nant nupkg
+- To publish set your nuget Api key:
+````
+nuget.exe setApiKey <api key here>
+````
+- then use nuget push to push nug nuget gallery:
+````
+nuget.exe push IKVM.WINDWARD.7.5.0.1.nupkg -Source https://api.nuget.org/v3/index.json
+````
