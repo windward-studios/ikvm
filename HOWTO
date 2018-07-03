@@ -42,7 +42,8 @@ methods and types that the IKVM.OpenJDK.*.dll assemblies use, but generally with
 method body (look for #if FIRST_PASS in the IKVM.Runtime.dll sources). The second pass is
 built after the IKVM.OpenJDK.*.dll assemblies have been built.
 
-The version number of the build is defined in ikvm/CommonAssemblyInfo.cs.in
+The version number of the build is defined in (it updates all other source files):
+  CommonAssemblyInfo.cs.in
 
 If you want to do a strong named build, make sure you have a key container installed named
 "ikvm-key" and run the build with "nant signed".
