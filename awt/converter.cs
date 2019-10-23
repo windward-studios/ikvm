@@ -364,16 +364,14 @@ namespace ikvm.awt
             return jFont;
         }
 
-		internal static java.awt.Shape ConvertShape(GraphicsPath path)
-		{
-
+        internal static java.awt.Shape ConvertShape(GraphicsPath path) {
 			java.awt.geom.GeneralPath shape = new java.awt.geom.GeneralPath();
-			shape.setWindingRule((int) path.FillMode);
+			shape.setWindingRule((int)path.FillMode);
 
-			// get these here because a lot of processing goes on to generate these arrays
 			int pointCount = path.PointCount;
 			if (pointCount > 0)
 			{
+				// get these here because a lot of processing goes on to generate these arrays
 				PointF[] points = path.PathPoints;
 				byte[] types = path.PathTypes;
 
@@ -412,6 +410,6 @@ namespace ikvm.awt
 			}
 
 			return shape;
-		}
+        }
 	}
 }

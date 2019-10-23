@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002, 2003, 2004, 2005, 2006, 2007 Jeroen Frijters
+  Copyright (C) 2002-2014 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -60,14 +60,18 @@ abstract class RetargetableJavaException : ApplicationException
 // hiding exceptions caused by coding errors in the IKVM code.
 sealed class ClassLoadingException : RetargetableJavaException
 {
-	internal ClassLoadingException(Exception x)
-		: base(x.Message, x)
+	internal ClassLoadingException(Exception x, string className)
+		: base(className, x)
 	{
 	}
 
-#if !STATIC_COMPILER && !STUB_GENERATOR
+#if !STATIC_COMPILER && !FIRST_PASS && !STUB_GENERATOR
 	internal override Exception ToJava()
 	{
+		if (!(InnerException is java.lang.Error) && !(InnerException is java.lang.RuntimeException))
+		{
+			return new java.lang.NoClassDefFoundError(Message.Replace('.', '/')).initCause(InnerException);
+		}
 		return InnerException;
 	}
 #endif
@@ -122,7 +126,7 @@ sealed class ClassNotFoundException : RetargetableJavaException
 #if !STATIC_COMPILER && !FIRST_PASS && !STUB_GENERATOR
 	internal override Exception ToJava()
 	{
-		return new java.lang.ClassNotFoundException(Message);
+		return new java.lang.NoClassDefFoundError(Message);
 	}
 #endif
 }
@@ -209,6 +213,21 @@ sealed class UnsupportedClassVersionError : ClassFormatError
 	internal override Exception ToJava()
 	{
 		return new java.lang.UnsupportedClassVersionError(Message);
+	}
+#endif
+}
+
+sealed class JavaSecurityException : RetargetableJavaException
+{
+	internal JavaSecurityException(string msg)
+		: base(msg)
+	{
+	}
+
+#if !STATIC_COMPILER && !FIRST_PASS && !STUB_GENERATOR
+	internal override Exception ToJava()
+	{
+		return new java.lang.SecurityException(Message);
 	}
 #endif
 }

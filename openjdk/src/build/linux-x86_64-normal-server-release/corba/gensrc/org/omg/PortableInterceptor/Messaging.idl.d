@@ -1,0 +1,2 @@
+/home/jeroen/jdk8u45-b14/build/linux-x86_64-normal-server-release/corba/gensrc/org/omg/Messaging/SYNC_WITH_TRANSPORT.java: /home/jeroen/jdk8u45-b14/corba/src/share/classes/org/omg/PortableInterceptor/Messaging.idl
+/home/jeroen/jdk8u45-b14/build/linux-x86_64-normal-server-release/corba/gensrc/org/omg/Messaging/SyncScopeHelper.java: /home/jeroen/jdk8u45-b14/corba/src/share/classes/org/omg/PortableInterceptor/Messaging.idl

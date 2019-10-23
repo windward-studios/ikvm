@@ -1,7 +1,7 @@
 /*
   Copyright (C) 2002, 2004, 2005, 2006, 2007 Jeroen Frijters
   Copyright (C) 2006 Active Endpoints, Inc.
-  Copyright (C) 2006 - 2011 Volker Berlin (i-net software)
+  Copyright (C) 2006 - 2014 Volker Berlin (i-net software)
   Copyright (C) 2011 Karsten Heinrich (i-net software)
 
   This software is provided 'as-is', without any express or implied
@@ -40,17 +40,29 @@ namespace ikvm.awt
     internal class BitmapGraphics : NetGraphics
     {
         private readonly Bitmap bitmap;
+        private readonly BufferedImage image;
 
-        internal BitmapGraphics(Bitmap bitmap, java.awt.Font font, Color fgcolor, Color bgcolor)
-            : base(createGraphics(bitmap), font, fgcolor, bgcolor)
+        internal BitmapGraphics(Bitmap bitmap, Object destination, java.awt.Font font, Color fgcolor, Color bgcolor)
+            : base(createGraphics(bitmap), destination, font, fgcolor, bgcolor)
         {
             this.bitmap = bitmap;
+            image = destination as BufferedImage;
         }
 
-        internal BitmapGraphics(Bitmap bitmap)
-            : base(createGraphics(bitmap), null, Color.White, Color.Black)
+        internal BitmapGraphics(Bitmap bitmap, Object destination)
+            : this(bitmap, destination, null, Color.White, Color.Black)
         {
-            this.bitmap = bitmap;
+        }
+
+        internal override Graphics g
+        {
+            get {
+                if (image != null)
+                {
+                    image.toBitmap();
+                }
+                return base.g; 
+            }
         }
 
         protected override SizeF GetSize() {
@@ -89,8 +101,8 @@ namespace ikvm.awt
     {
         private readonly Control control;
 
-        internal ComponentGraphics(Control control, java.awt.Color fgColor, java.awt.Color bgColor, java.awt.Font font)
-            : base(control.CreateGraphics(), font, J2C.ConvertColor(fgColor), J2C.ConvertColor(bgColor))
+        internal ComponentGraphics(Control control, java.awt.Component target, java.awt.Color fgColor, java.awt.Color bgColor, java.awt.Font font)
+            : base(control.CreateGraphics(), target, font, J2C.ConvertColor(fgColor), J2C.ConvertColor(bgColor))
         {
             this.control = control;
         }
@@ -116,12 +128,17 @@ namespace ikvm.awt
             return (Point)this.control.Invoke(new Converter<Point,Point>(getPointToScreenImpl),point);
         }
 
-		public override void copyArea(int x, int y, int width, int height, int dx, int dy)
-		{
-            Point src = getPointToScreen(new Point(x + (int)this.g.Transform.OffsetX, y + (int)this.g.Transform.OffsetY));
-            Point dest = new Point(x + (int)this.g.Transform.OffsetX + dx, y + (int)this.g.Transform.OffsetY + dy);
-            this.g.CopyFromScreen(src, dest, new Size(width, height));
-		}
+        public override void copyArea(int x, int y, int width, int height, int dx, int dy)
+        {
+            Matrix t = g.Transform;
+            Point src = getPointToScreen(new Point(x + (int)t.OffsetX, y + (int)t.OffsetY));
+            Bitmap copy = new Bitmap(width, height);
+            using (Graphics gCopy = Graphics.FromImage(copy))
+            {
+                gCopy.CopyFromScreen(src, new Point(0, 0), new Size(width, height));
+            }
+            g.DrawImageUnscaled(copy, x + dx, y + dy);
+        }
 
 		public override void clip(java.awt.Shape shape)
 		{
@@ -150,7 +167,7 @@ namespace ikvm.awt
         private bool isBase = true;
 
         internal PrintGraphics(Graphics g)
-            : base(g, null, Color.White, Color.Black)
+            : base(g, null, null, Color.White, Color.Black)
         {
             baseContext = new PrintGraphicsContext();
             baseContext.Current = this;
@@ -215,7 +232,7 @@ namespace ikvm.awt
         public override void clipRect(int x, int y, int w, int h)
         {
             checkState();
-            base.clearRect(x, y, w, h);
+            base.clipRect(x, y, w, h);
         }
 
         public override void clip(java.awt.Shape shape)
@@ -744,7 +761,7 @@ namespace ikvm.awt
                     netG.g.Clip = Clip;
                     netG.g.SmoothingMode = SmoothingMode;
                     netG.g.PixelOffsetMode = PixelOffsetMode;
-                    netG.g.TextRenderingHint = TextRenderingHint;
+                    netG.setTextRenderingHint(TextRenderingHint);
                     netG.g.InterpolationMode = InterpolationMode;
                     netG.g.CompositingMode = CompositingMode;
                 }
@@ -768,10 +785,9 @@ namespace ikvm.awt
         }
     }
 
-    internal abstract class NetGraphics : java.awt.Graphics2D
+    internal abstract class NetGraphics : java.awt.Graphics2D//sun.java2d.SunGraphics2D
     {
-        internal Graphics g;
-        internal Graphics JGraphics { get { return g; } }
+        private Graphics graphics;
         private java.awt.Color javaColor;
         private java.awt.Paint javaPaint;
         internal Color color;
@@ -780,6 +796,7 @@ namespace ikvm.awt
         private java.awt.Stroke stroke;
         private static java.awt.BasicStroke defaultStroke = new java.awt.BasicStroke();
         private Font netfont;
+        private int baseline;
         internal Brush brush;
         internal Pen pen;
         private CompositeHelper composite;
@@ -787,7 +804,16 @@ namespace ikvm.awt
         private Object textAntialiasHint;
         private Object fractionalHint = java.awt.RenderingHints.VALUE_FRACTIONALMETRICS_DEFAULT;
 
-        protected NetGraphics(Graphics g, java.awt.Font font, Color fgcolor, Color bgcolor)
+        private static System.Collections.Generic.Dictionary<String, Int32> baselines = new System.Collections.Generic.Dictionary<String, Int32>();
+
+        internal static readonly StringFormat FORMAT = new StringFormat(StringFormat.GenericTypographic);
+        static NetGraphics()
+        {
+            FORMAT.FormatFlags = StringFormatFlags.MeasureTrailingSpaces | StringFormatFlags.NoWrap | StringFormatFlags.FitBlackBox;
+            FORMAT.Trimming = StringTrimming.None;
+        }
+
+        protected NetGraphics(Graphics g, Object destination, java.awt.Font font, Color fgcolor, Color bgcolor) //: base( new sun.java2d.SurfaceData(destination) )
         {
             if (font == null)
             {
@@ -801,12 +827,21 @@ namespace ikvm.awt
             init(g);
         }
 
+        /// <summary>
+        /// The current C# Graphics
+        /// </summary>
+        internal virtual Graphics g
+        {
+            get { return graphics; }
+            set { graphics = value; }
+        }
+
         protected void init(Graphics graphics)
         {
             NetGraphicsState state = new NetGraphicsState();
             state.saveGraphics(this);
             g = graphics;
-            state.restoreGraphics(this);            
+            state.restoreGraphics(this);
         }
 
         /// <summary>
@@ -850,7 +885,7 @@ namespace ikvm.awt
         {
             if (pen!=null) pen.Dispose();
             if (brush!=null) brush.Dispose();
-            g.Dispose();
+            graphics.Dispose(); //for dispose we does not need to synchronize the buffer of a bitmap
         }
 
         public override void drawArc(int x, int y, int width, int height, int startAngle, int arcAngle)
@@ -1190,6 +1225,7 @@ namespace ikvm.awt
             {
                 netfont = f.getNetFont();
                 font = f;
+                baseline = getBaseline( netfont, g.TextRenderingHint );
             }
         }
 
@@ -1278,30 +1314,33 @@ namespace ikvm.awt
             drawString(str, (float)x, (float)y);
         }
 
-        public override void drawString(String text, float x, float y)
-        {
-            if (text.Length == 0)
-            {
+        public override void drawString(String text, float x, float y) {
+            if (text.Length == 0) {
                 return;
             }
-            bool fractional = isFractionalMetrics();
-            StringFormat format = new StringFormat(StringFormat.GenericTypographic);
-            format.FormatFlags = StringFormatFlags.MeasureTrailingSpaces | StringFormatFlags.NoWrap | StringFormatFlags.FitBlackBox;
-            format.Trimming = StringTrimming.None;
-            if (fractional || !sun.font.StandardGlyphVector.isSimpleString(font, text))
-            {
-                g.DrawString(text, netfont, brush, x, y - font.getSize(), format);
-            }
-            else
-            {
-                // fixed metric for simple text, we position every character to simulate the Java behaviour
-                java.awt.font.FontRenderContext frc = new java.awt.font.FontRenderContext(null, isAntiAlias(), fractional);
-                sun.font.FontDesignMetrics metrics = sun.font.FontDesignMetrics.getMetrics(font, frc);
-                y -= font.getSize();
-                for (int i = 0; i < text.Length; i++)
-                {
-                    g.DrawString(text.Substring(i, 1), netfont, brush, x, y, format);
-                    x += metrics.charWidth(text[i]);
+            CompositingMode origCM = g.CompositingMode;
+            try {
+                if (origCM != CompositingMode.SourceOver) {
+                    // Java has a different behaviar for AlphaComposite and Text Antialiasing
+                    g.CompositingMode = CompositingMode.SourceOver;
+                }
+
+                bool fractional = isFractionalMetrics();
+                if (fractional || !sun.font.StandardGlyphVector.isSimpleString(font, text)) {
+                    g.DrawString(text, netfont, brush, x, y - baseline, FORMAT);
+                } else {
+                    // fixed metric for simple text, we position every character to simulate the Java behaviour
+                    java.awt.font.FontRenderContext frc = new java.awt.font.FontRenderContext(null, isAntiAlias(), fractional);
+                    sun.font.FontDesignMetrics metrics = sun.font.FontDesignMetrics.getMetrics(font, frc);
+                    y -= baseline;
+                    for (int i = 0; i < text.Length; i++) {
+                        g.DrawString(text.Substring(i, 1), netfont, brush, x, y, FORMAT);
+                        x += metrics.charWidth(text[i]);
+                    }
+                }
+            } finally {
+                if (origCM != CompositingMode.SourceOver) {
+                    g.CompositingMode = origCM;
                 }
             }
         }
@@ -1345,13 +1384,16 @@ namespace ikvm.awt
 
         public override void setComposite(java.awt.Composite comp)
         {
+            if (javaComposite == comp) {
+                return;
+            }
             if (comp == null)
             {
                 throw new java.lang.IllegalArgumentException("null Composite");
             }
             this.javaComposite = comp;
-            composite = CompositeHelper.Create(comp,g);
-            java.awt.Paint oldPaint = javaPaint;
+            java.awt.Paint oldPaint = getPaint(); //getPaint() is never null
+            composite = CompositeHelper.Create(comp, g);
             javaPaint = null;
             setPaint(oldPaint);
         }
@@ -1420,10 +1462,13 @@ namespace ikvm.awt
             if (paint is java.awt.TexturePaint)
             {
                 java.awt.TexturePaint texture = (java.awt.TexturePaint)paint;
-                brush = new TextureBrush(
-                    J2C.ConvertImage(texture.getImage()),
-                    J2C.ConvertRect(texture.getAnchorRect()),
-                    composite.GetImageAttributes());
+                Bitmap txtr = J2C.ConvertImage(texture.getImage());
+                java.awt.geom.Rectangle2D anchor = texture.getAnchorRect();
+                TextureBrush txtBrush;
+                brush = txtBrush = new TextureBrush(txtr, new Rectangle(0, 0, txtr.Width, txtr.Height), composite.GetImageAttributes());
+                txtBrush.TranslateTransform((float)anchor.getX(), (float)anchor.getY());
+                txtBrush.ScaleTransform((float)anchor.getWidth() / txtr.Width, (float)anchor.getHeight() / txtr.Height);
+                txtBrush.WrapMode = WrapMode.Tile;
                 pen.Brush = brush;
                 return;
             }
@@ -1486,7 +1531,104 @@ namespace ikvm.awt
                 return;
             }
 
-            throw new NotImplementedException("setPaint("+paint.GetType().FullName+")");
+            if (paint is java.awt.RadialGradientPaint )
+            {
+                java.awt.RadialGradientPaint gradient = (java.awt.RadialGradientPaint)paint;
+                GraphicsPath path = new GraphicsPath();
+                SizeF size = GetSize();
+
+                PointF center = J2C.ConvertPoint(gradient.getCenterPoint());
+
+                float radius = gradient.getRadius();
+                int factor = (int)Math.Ceiling(Math.Max(size.Width, size.Height) / radius);
+
+                float diameter = radius * factor;
+                path.AddEllipse(center.X - diameter, center.Y - diameter, diameter * 2, diameter * 2);
+
+                java.awt.Color[] javaColors = gradient.getColors();
+                float[] fractions = gradient.getFractions();
+                int length = javaColors.Length;
+                ColorBlend colorBlend = new ColorBlend(length * factor);
+                Color[] colors = colorBlend.Colors;
+                float[] positions = colorBlend.Positions;
+
+                for (int c = 0, j = length - 1; j >= 0; )
+                {
+                    positions[c] = (1 - fractions[j]) / factor;
+                    colors[c++] = composite.GetColor(javaColors[j--]);
+                }
+
+                java.awt.MultipleGradientPaint.CycleMethod.__Enum cycle = (java.awt.MultipleGradientPaint.CycleMethod.__Enum)gradient.getCycleMethod().ordinal();
+                for (int f = 1; f < factor; f++)
+                {
+                    int off = f * length;
+                    for (int c = 0, j = length - 1; j >= 0; j--, c++)
+                    {
+                        switch (cycle)
+                        {
+                            case java.awt.MultipleGradientPaint.CycleMethod.__Enum.REFLECT:
+                                if (f % 2 == 0)
+                                {
+                                    positions[off + c] = (f + 1 - fractions[j]) / factor;
+                                    colors[off + c] = colors[c];
+                                }
+                                else
+                                {
+                                    positions[off + c] = (f + fractions[c]) / factor;
+                                    colors[off + c] = colors[j];
+                                }
+                                break;
+                            case java.awt.MultipleGradientPaint.CycleMethod.__Enum.NO_CYCLE:
+                                positions[off + c] = (f + 1 - fractions[j]) / factor;
+                                break;
+                            default: //CycleMethod.REPEAT
+                                positions[off + c] = (f + 1 - fractions[j]) / factor;
+                                colors[off + c] = colors[c];
+                                break;
+                        }
+                    }
+                }
+                if (cycle == java.awt.MultipleGradientPaint.CycleMethod.__Enum.NO_CYCLE && factor > 1)
+                {
+                    Array.Copy(colors, 0, colors, colors.Length - length, length);
+                    Color color = colors[length - 1];
+                    for (int i = colors.Length - length - 1; i >= 0; i--)
+                    {
+                        colors[i] = color;
+                    }
+                }
+
+                PathGradientBrush pathBrush = new PathGradientBrush(path);
+                pathBrush.CenterPoint = center;
+                pathBrush.InterpolationColors = colorBlend;
+
+                brush = pathBrush;
+                pen.Brush = brush;
+                return;
+            }
+
+            //generic paint to brush conversion for custom paints
+            //the tranform of the graphics should not change between the creation and it usage
+            using (Matrix transform = g.Transform)
+            {
+                SizeF size = GetSize();
+                int width = (int)size.Width;
+                int height = (int)size.Height;
+                java.awt.Rectangle bounds = new java.awt.Rectangle(0, 0, width, height);
+
+                java.awt.PaintContext context = paint.createContext(ColorModel.getRGBdefault(), bounds, bounds, C2J.ConvertMatrix(transform), getRenderingHints());
+                WritableRaster raster = (WritableRaster)context.getRaster(0, 0, width, height);
+                BufferedImage txtrImage = new BufferedImage(context.getColorModel(), raster, true, null);
+                Bitmap txtr = J2C.ConvertImage(txtrImage);
+
+                TextureBrush txtBrush;
+                brush = txtBrush = new TextureBrush(txtr, new Rectangle(0, 0, width, height), composite.GetImageAttributes());
+                transform.Invert();
+                txtBrush.Transform = transform;
+                txtBrush.WrapMode = WrapMode.Tile;
+                pen.Brush = brush;
+                return;
+            }
         }
 
 		public override void setStroke(java.awt.Stroke stroke)
@@ -1650,13 +1792,13 @@ namespace ikvm.awt
                 if (hintValue == java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_DEFAULT ||
                     hintValue == java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_OFF)
                 {
-                    g.TextRenderingHint = TextRenderingHint.SingleBitPerPixelGridFit;
+                    setTextRenderingHint(TextRenderingHint.SingleBitPerPixelGridFit);
                     textAntialiasHint = hintValue;
                     return;
                 }
                 if (hintValue == java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
                 {
-                    g.TextRenderingHint = TextRenderingHint.AntiAlias;
+                    setTextRenderingHint(TextRenderingHint.AntiAlias);
                     textAntialiasHint = hintValue;
                     return;
                 }
@@ -1821,7 +1963,7 @@ namespace ikvm.awt
 
         public override java.awt.Color getBackground()
         {
-            return bgcolor == Color.Empty ? null : new java.awt.Color(color.ToArgb(), true);
+            return bgcolor == Color.Empty ? null : new java.awt.Color(bgcolor.ToArgb(), true);
         }
 
         public override java.awt.Stroke getStroke()
@@ -1831,6 +1973,71 @@ namespace ikvm.awt
                 return defaultStroke;
             }
             return stroke; 
+        }
+
+        internal void setTextRenderingHint(TextRenderingHint hint)
+        {
+            g.TextRenderingHint = hint;
+            baseline = getBaseline(netfont, hint);
+        }
+
+        /// <summary>
+        /// Caclulate the baseline from a font and a TextRenderingHint
+        /// </summary>
+        /// <param name="font">the font</param>
+        /// <param name="hint">the used TextRenderingHint</param>
+        /// <returns></returns>
+        private static int getBaseline(Font font, TextRenderingHint hint)
+        {
+            lock (baselines)
+            {
+                String key = font.ToString() + hint.ToString();
+                int baseline;
+                if (!baselines.TryGetValue(key, out baseline))
+                {
+                    FontFamily family = font.FontFamily;
+                    FontStyle style = font.Style;
+                    float ascent = family.GetCellAscent(style);
+                    float lineSpace = family.GetLineSpacing(style);
+
+                    baseline = (int)Math.Round(font.GetHeight() * ascent / lineSpace);
+
+                    // Until this point the calulation use only the Font. But with different TextRenderingHint there are smal differences.
+                    // There is no API that calulate the offset from TextRenderingHint that we messure it.
+                    const int w = 3;
+                    const int h = 3;
+
+                    Bitmap bitmap = new Bitmap(w, h);
+                    Graphics g = Graphics.FromImage(bitmap);
+                    g.TextRenderingHint = hint;
+                    g.FillRectangle(new SolidBrush(Color.White), 0, 0, w, h);
+                    g.DrawString("A", font, new SolidBrush(Color.Black), 0, -baseline, FORMAT);
+                    g.DrawString("X", font, new SolidBrush(Color.Black), 0, -baseline, FORMAT);
+                    g.Dispose();
+
+                    int y = 0;
+                LINE:
+                    while (y < h)
+                    {
+                        for (int x = 0; x < w; x++)
+                        {
+                            Color color = bitmap.GetPixel(x, y);
+                            if (color.GetBrightness() < 0.5)
+                            {
+                                //there is a black pixel, we continue in the next line.
+                                baseline++;
+                                y++;
+                                goto LINE;
+                            }
+                        }
+                        break; // there was a line without black pixel
+                    }
+
+
+                    baselines[key] = baseline;
+                }
+                return baseline;
+            }
         }
 
         private bool isAntiAlias()
@@ -1862,6 +2069,7 @@ namespace ikvm.awt
             Matrix currentMatrix = null;
             Font currentFont = netfont;
             TextRenderingHint currentHint = g.TextRenderingHint;
+            int currentBaseline = baseline;
             try
             {
                 java.awt.Font javaFont = gv.getFont();
@@ -1869,19 +2077,22 @@ namespace ikvm.awt
                 {
                     netfont = javaFont.getNetFont();
                 }
+                TextRenderingHint hint;
                 if (frc.isAntiAliased()) {
                     if( frc.usesFractionalMetrics() ){
-                        g.TextRenderingHint = TextRenderingHint.AntiAlias;
+                        hint = TextRenderingHint.AntiAlias;
                     } else {
-                        g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+                        hint = TextRenderingHint.AntiAliasGridFit;
                     }
                 } else {
                     if (frc.usesFractionalMetrics()) {
-                        g.TextRenderingHint = TextRenderingHint.SingleBitPerPixel;
+                        hint = TextRenderingHint.SingleBitPerPixel;
                     } else {
-                        g.TextRenderingHint = TextRenderingHint.SingleBitPerPixelGridFit;
+                        hint = TextRenderingHint.SingleBitPerPixelGridFit;
                     }
                 }
+                g.TextRenderingHint = hint;
+                baseline = getBaseline(netfont, hint);
                 if (!frc.getTransform().equals(getTransform()))
                 {
                     // save the old context and use the transformation from the renderContext
@@ -1894,6 +2105,7 @@ namespace ikvm.awt
             {
                 // Restore the old context if needed
                 g.TextRenderingHint = currentHint;
+                baseline = currentBaseline;
                 netfont = currentFont;
                 if (currentMatrix != null)
                 {
@@ -2030,7 +2242,7 @@ namespace ikvm.awt
 
         public override java.awt.GraphicsConfiguration getDefaultConfiguration()
         {
-            return new NetGraphicsConfiguration(Screen.PrimaryScreen);
+            return new NetGraphicsConfiguration(screen);
         }
 
         public override string getIDstring()
@@ -2044,14 +2256,20 @@ namespace ikvm.awt
         }
     }
 
-    public class NetGraphicsEnvironment : java.awt.GraphicsEnvironment
+    public class NetGraphicsEnvironment : sun.java2d.SunGraphicsEnvironment
     {
+
+        public override bool isDisplayLocal()
+        {
+            return true;
+        }
+
         // Create a bitmap with the dimensions of the argument image. Then
         // create a graphics objects from the bitmap. All paint operations will
         // then paint the bitmap.
 		public override java.awt.Graphics2D createGraphics(BufferedImage bi)
 		{
-			return new BitmapGraphics(bi.getBitmap());
+			return new BitmapGraphics(bi.getBitmap(), bi );
 		}
 
         public override java.awt.Font[] getAllFonts()

@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2011 Jeroen Frijters
+  Copyright (C) 2011-2014 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -21,6 +21,8 @@
   jeroen@frijters.net
   
 */
+using System;
+using System.Reflection;
 #if !FIRST_PASS
 using java.lang.management;
 #endif
@@ -29,6 +31,41 @@ static class Java_sun_management_ClassLoadingImpl
 {
 	public static void setVerboseClass(bool value)
 	{
+	}
+}
+
+static class Java_sun_management_FileSystemImpl
+{
+    public static void init0()
+	{
+	}
+
+	public static bool isSecuritySupported0(string path)
+	{
+		throw new NotSupportedException();
+	}
+
+	public static bool isAccessUserOnly0(string path)
+	{
+		throw new NotSupportedException();
+	}
+}
+
+static class Java_sun_management_GcInfoBuilder
+{
+	public static int getNumGcExtAttributes(object _this, object gc)
+	{
+		throw new NotSupportedException();
+	}
+
+	public static void fillGcAttributeInfo(object _this, object gc, int numAttributes, string[] attributeNames, char[] types, string[] descriptions)
+	{
+		throw new NotSupportedException();
+	}
+
+	public static object getLastGcInfo0(object _this, object gc, int numExtAtts, object[] extAttValues, char[] extAttTypes, object[] before, object[] after)
+	{
+		throw new NotSupportedException();
 	}
 }
 
@@ -67,11 +104,81 @@ static class Java_sun_management_MemoryImpl
 	}
 }
 
+static class Java_sun_management_OperatingSystemImpl
+{
+	private static long getComputerInfo(string property){
+#pragma warning disable 618
+        Assembly asm = Assembly.LoadWithPartialName("Microsoft.VisualBasic");
+#pragma warning restore 618
+        if (asm != null)
+        {
+            Type type = asm.GetType("Microsoft.VisualBasic.Devices.ComputerInfo");
+            if (type != null)
+            {
+                try
+                {
+                    ulong result = (ulong)type.GetProperty(property).GetValue(Activator.CreateInstance(type), null);
+                    return (long)result;
+                }
+                catch (TargetInvocationException)
+                {
+                    // Mono does not implement this property
+                }
+            }
+        }
+		throw new System.NotImplementedException();
+	}
+
+	public static long getCommittedVirtualMemorySize0(object _this)
+	{
+		throw new System.NotImplementedException();
+	}
+
+	public static long getTotalSwapSpaceSize(object _this)
+	{
+		throw new System.NotImplementedException();
+	}
+
+	public static long getFreeSwapSpaceSize(object _this)
+	{
+		throw new System.NotImplementedException();
+	}
+
+	public static long getProcessCpuTime(object _this)
+	{
+		throw new System.NotImplementedException();
+	}
+
+	public static long getFreePhysicalMemorySize(object _this)
+	{
+		return getComputerInfo("AvailablePhysicalMemory");
+	}
+
+	public static long getTotalPhysicalMemorySize(object _this)
+	{
+	    return getComputerInfo("TotalPhysicalMemory");
+	}
+
+	public static double getSystemCpuLoad(object _this)
+	{
+		throw new System.NotImplementedException();
+	}
+
+	public static double getProcessCpuLoad(object _this)
+	{
+		throw new System.NotImplementedException();
+	}
+
+	public static void initialize()
+	{
+	}
+}
+
 static class Java_sun_management_ThreadImpl
 {
 	public static object getThreads()
 	{
-        return IKVM.NativeCode.java.lang.Thread.getThreads();
+        return Java_java_lang_Thread.getThreads();
 	}
 
     private const int JVMTI_THREAD_STATE_ALIVE = 0x0001;
@@ -161,9 +268,28 @@ static class Java_sun_management_ThreadImpl
 #endif
     }
 
+	private static int GetCurrentThreadId()
+	{
+#pragma warning disable 618
+		// On the CLR and Mono on Windows this is the (obsolete) equivalent of kernel32!GetCurrentThreadId
+		return System.AppDomain.GetCurrentThreadId();
+#pragma warning restore 618
+	}
+
 	public static long getThreadTotalCpuTime0(long id)
 	{
-		throw new System.NotImplementedException();
+        if (id == 0) {
+            int currentId = GetCurrentThreadId();
+            System.Diagnostics.ProcessThreadCollection threads = System.Diagnostics.Process.GetCurrentProcess().Threads;
+            foreach (System.Diagnostics.ProcessThread t in threads) {
+                if (t.Id == currentId) {
+                    return (long)(t.TotalProcessorTime.Ticks * 100);
+                }
+            }
+            return 0;
+        } else {
+            throw new System.NotImplementedException("Only current Thread is supported.");
+        }
 	}
 
 	public static void getThreadTotalCpuTime1(long[] ids, long[] result)
@@ -188,7 +314,7 @@ static class Java_sun_management_ThreadImpl
 
 	public static void setThreadCpuTimeEnabled0(bool enable)
 	{
-		throw new System.NotImplementedException();
+		//ignoring, we need nothing to enable
 	}
 
 	public static void setThreadAllocatedMemoryEnabled0(bool enable)

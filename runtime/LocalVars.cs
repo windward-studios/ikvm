@@ -154,7 +154,7 @@ struct LocalVarInfo
 			}
 			else
 			{
-				if (instructions[i].NormalizedOpCode == NormalizedByteCode.__invokespecial)
+				if (instructions[i].NormalizedOpCode == NormalizedByteCode.__invokespecial || instructions[i].NormalizedOpCode == NormalizedByteCode.__dynamic_invokespecial)
 				{
 					invokespecialLocalVars[i] = new LocalVar[method.MaxLocals];
 					for (int j = 0; j < invokespecialLocalVars[i].Length; j++)
@@ -338,8 +338,7 @@ struct LocalVarInfo
 			}
 			else
 			{
-				Array.Resize(ref data, data.Length + 1);
-				data[data.Length - 1] = instructionIndex;
+				data = ArrayUtil.Concat(data, instructionIndex);
 			}
 		}
 
@@ -464,8 +463,8 @@ struct LocalVarInfo
 
 						// Now we recursively analyse the handler and afterwards merge the endfault locations back to us
 						FindLocalVarState[] handlerState = new FindLocalVarState[instructions.Length];
-						handlerState[handler].changed = true;
-						handlerState[handler].sites = new FindLocalVarStoreSite[maxLocals];
+						handlerState[handler].Merge(curr);
+						curr = new FindLocalVarState();
 						FindLocalVariablesImpl(codeInfo, classFile, method, handlerState);
 
 						// Merge back to the target of our __goto_finally
@@ -476,7 +475,7 @@ struct LocalVarInfo
 								&& VerifierTypeWrapper.IsFaultBlockException(codeInfo.GetRawStackTypeWrapper(j, 0))
 								&& ((VerifierTypeWrapper)codeInfo.GetRawStackTypeWrapper(j, 0)).Index == handler)
 							{
-								state[instructions[i].Arg1].Merge(handlerState[j]);
+								curr.Merge(handlerState[j]);
 							}
 						}
 					}

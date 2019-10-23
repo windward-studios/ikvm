@@ -373,9 +373,7 @@ namespace IKVM.Internal.MapXml
 				if(typeWrapper.IsGhost || typeWrapper.IsGhostArray)
 				{
 					ilgen.Emit(OpCodes.Dup);
-					// NOTE we pass a null context, but that shouldn't be a problem, because
-					// typeWrapper should never be an UnloadableTypeWrapper
-					typeWrapper.EmitInstanceOf(null, ilgen);
+					typeWrapper.EmitInstanceOf(ilgen);
 					CodeEmitterLabel endLabel = ilgen.DefineLabel();
 					ilgen.EmitBrtrue(endLabel);
 					ilgen.Emit(OpCodes.Pop);
@@ -406,9 +404,7 @@ namespace IKVM.Internal.MapXml
 			}
 			else
 			{
-				// NOTE we pass a null context, but that shouldn't be a problem, because
-				// typeWrapper should never be an UnloadableTypeWrapper
-				typeWrapper.EmitCheckcast(null, ilgen);
+				typeWrapper.EmitCheckcast(ilgen);
 			}
 		}
 	}
@@ -833,9 +829,7 @@ namespace IKVM.Internal.MapXml
 
 		internal override void Generate(CodeGenContext context, CodeEmitter ilgen)
 		{
-			FieldWrapper fw = StaticCompiler.GetClassForMapXml(context.ClassLoader, Class).GetFieldWrapper(Name, Sig);
-			fw.Link();
-			ilgen.Emit(OpCodes.Ldflda, fw.GetField());
+			ilgen.Emit(OpCodes.Ldflda, StaticCompiler.GetFieldForMapXml(context.ClassLoader, Class, Name, Sig).GetField());
 		}
 	}
 
@@ -851,10 +845,8 @@ namespace IKVM.Internal.MapXml
 
 		internal override void Generate(CodeGenContext context, CodeEmitter ilgen)
 		{
-			FieldWrapper fw = StaticCompiler.GetClassForMapXml(context.ClassLoader, Class).GetFieldWrapper(Name, Sig);
-			fw.Link();
 			// we don't use fw.EmitGet because we don't want automatic unboxing and whatever
-			ilgen.Emit(OpCodes.Ldfld, fw.GetField());
+			ilgen.Emit(OpCodes.Ldfld, StaticCompiler.GetFieldForMapXml(context.ClassLoader, Class, Name, Sig).GetField());
 		}
 	}
 
@@ -878,10 +870,8 @@ namespace IKVM.Internal.MapXml
 			}
 			else
 			{
-				FieldWrapper fw = StaticCompiler.GetClassForMapXml(context.ClassLoader, Class).GetFieldWrapper(Name, Sig);
-				fw.Link();
 				// we don't use fw.EmitGet because we don't want automatic unboxing and whatever
-				ilgen.Emit(OpCodes.Ldsfld, fw.GetField());
+				ilgen.Emit(OpCodes.Ldsfld, StaticCompiler.GetFieldForMapXml(context.ClassLoader, Class, Name, Sig).GetField());
 			}
 		}
 	}
@@ -898,10 +888,8 @@ namespace IKVM.Internal.MapXml
 
 		internal override void Generate(CodeGenContext context, CodeEmitter ilgen)
 		{
-			FieldWrapper fw = StaticCompiler.GetClassForMapXml(context.ClassLoader, Class).GetFieldWrapper(Name, Sig);
-			fw.Link();
 			// we don't use fw.EmitSet because we don't want automatic unboxing and whatever
-			ilgen.Emit(OpCodes.Stfld, fw.GetField());
+			ilgen.Emit(OpCodes.Stfld, StaticCompiler.GetFieldForMapXml(context.ClassLoader, Class, Name, Sig).GetField());
 		}
 	}
 
@@ -917,10 +905,8 @@ namespace IKVM.Internal.MapXml
 
 		internal override void Generate(CodeGenContext context, CodeEmitter ilgen)
 		{
-			FieldWrapper fw = StaticCompiler.GetClassForMapXml(context.ClassLoader, Class).GetFieldWrapper(Name, Sig);
-			fw.Link();
 			// we don't use fw.EmitSet because we don't want automatic unboxing and whatever
-			ilgen.Emit(OpCodes.Stsfld, fw.GetField());
+			ilgen.Emit(OpCodes.Stsfld, StaticCompiler.GetFieldForMapXml(context.ClassLoader, Class, Name, Sig).GetField());
 		}
 	}
 
@@ -1061,6 +1047,24 @@ namespace IKVM.Internal.MapXml
 	public sealed class Mul : Simple
 	{
 		public Mul() : base(OpCodes.Mul)
+		{
+		}
+	}
+
+	[XmlType("div_un")]
+	public sealed class Div_Un : Simple
+	{
+		public Div_Un()
+			: base(OpCodes.Div_Un)
+		{
+		}
+	}
+
+	[XmlType("rem_un")]
+	public sealed class Rem_Un : Simple
+	{
+		public Rem_Un()
+			: base(OpCodes.Rem_Un)
 		{
 		}
 	}
@@ -1220,7 +1224,7 @@ namespace IKVM.Internal.MapXml
 
 		internal override void Generate(CodeGenContext context, CodeEmitter ilgen)
 		{
-			ilgen.Emit(OpCodes.Ldelema, context.ClassLoader.FieldTypeWrapperFromSig(Sig).TypeAsArrayType);
+			ilgen.Emit(OpCodes.Ldelema, context.ClassLoader.FieldTypeWrapperFromSig(Sig, LoadMode.LoadOrThrow).TypeAsArrayType);
 		}
 	}
 
@@ -1232,7 +1236,7 @@ namespace IKVM.Internal.MapXml
 
 		internal override void Generate(CodeGenContext context, CodeEmitter ilgen)
 		{
-			ilgen.Emit(OpCodes.Newarr, context.ClassLoader.FieldTypeWrapperFromSig(Sig).TypeAsArrayType);
+			ilgen.Emit(OpCodes.Newarr, context.ClassLoader.FieldTypeWrapperFromSig(Sig, LoadMode.LoadOrThrow).TypeAsArrayType);
 		}
 	}
 
@@ -1463,6 +1467,8 @@ namespace IKVM.Internal.MapXml
 		[XmlElement(typeof(Add))]
 		[XmlElement(typeof(Sub))]
 		[XmlElement(typeof(Mul))]
+		[XmlElement(typeof(Div_Un))]
+		[XmlElement(typeof(Rem_Un))]
 		[XmlElement(typeof(And))]
 		[XmlElement(typeof(Or))]
 		[XmlElement(typeof(Xor))]

@@ -1,7 +1,7 @@
 /*
   Copyright (C) 2002, 2004, 2005, 2006 Jeroen Frijters
   Copyright (C) 2006 Active Endpoints, Inc.
-  Copyright (C) 2006 - 2010 Volker Berlin (i-net software)
+  Copyright (C) 2006 - 2013 Volker Berlin (i-net software)
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -123,7 +123,7 @@ namespace ikvm.awt
             // HACK for off-screen images we don't want ClearType or anti-aliasing
             // TODO I'm sure Java 2D has a way to control text rendering quality, we should honor that
             //g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SingleBitPerPixelGridFit;
-            return new BitmapGraphics(bitmap, getFont(), J2C.ConvertColor(getForeground()), J2C.ConvertColor(getBackground()));
+            return new BitmapGraphics(bitmap, this, getFont(), J2C.ConvertColor(getForeground()), J2C.ConvertColor(getBackground()));
         }
 
         public override int getHeight()
@@ -158,6 +158,11 @@ namespace ikvm.awt
 
     class NoImage : java.awt.Image
     {
+        private sun.awt.image.InputStreamImageSource source;
+
+        internal NoImage(sun.awt.image.InputStreamImageSource source) {
+            this.source = source;
+        }
 
         public override int getWidth(java.awt.image.ImageObserver observer)
         {
@@ -179,7 +184,7 @@ namespace ikvm.awt
 
         public override ImageProducer getSource()
         {
-            return null;
+            return source;
         }
 
         public override java.awt.Graphics getGraphics()

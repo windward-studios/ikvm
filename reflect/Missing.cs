@@ -27,10 +27,14 @@ using System.Runtime.InteropServices;
 
 namespace IKVM.Reflection
 {
+#if !CORECLR
 	[Serializable]
+#endif
 	public sealed class MissingAssemblyException : InvalidOperationException
 	{
+#if !CORECLR
 		[NonSerialized]
+#endif
 		private readonly MissingAssembly assembly;
 
 		internal MissingAssemblyException(MissingAssembly assembly)
@@ -39,10 +43,12 @@ namespace IKVM.Reflection
 			this.assembly = assembly;
 		}
 
+#if !CORECLR
 		private MissingAssemblyException(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
 			: base(info, context)
 		{
 		}
+#endif
 
 		public Assembly Assembly
 		{
@@ -50,10 +56,14 @@ namespace IKVM.Reflection
 		}
 	}
 
+#if !CORECLR
 	[Serializable]
+#endif
 	public sealed class MissingModuleException : InvalidOperationException
 	{
+#if !CORECLR
 		[NonSerialized]
+#endif
 		private readonly MissingModule module;
 
 		internal MissingModuleException(MissingModule module)
@@ -62,10 +72,12 @@ namespace IKVM.Reflection
 			this.module = module;
 		}
 
+#if !CORECLR
 		private MissingModuleException(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
 			: base(info, context)
 		{
 		}
+#endif
 
 		public Module Module
 		{
@@ -73,10 +85,14 @@ namespace IKVM.Reflection
 		}
 	}
 
+#if !CORECLR
 	[Serializable]
+#endif
 	public sealed class MissingMemberException : InvalidOperationException
 	{
+#if !CORECLR
 		[NonSerialized]
+#endif
 		private readonly MemberInfo member;
 
 		internal MissingMemberException(MemberInfo member)
@@ -85,10 +101,12 @@ namespace IKVM.Reflection
 			this.member = member;
 		}
 
+#if !CORECLR
 		private MissingMemberException(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
 			: base(info, context)
 		{
 		}
+#endif
 
 		public MemberInfo MemberInfo
 		{
@@ -144,7 +162,7 @@ namespace IKVM.Reflection
 		internal MissingAssembly(Universe universe, string name)
 			: base(universe)
 		{
-			module = new MissingModule(this);
+			module = new MissingModule(this, -1);
 			this.fullName = name;
 		}
 
@@ -236,12 +254,14 @@ namespace IKVM.Reflection
 
 	sealed class MissingModule : NonPEModule
 	{
-		private readonly MissingAssembly assembly;
+		private readonly Assembly assembly;
+		private readonly int index;
 
-		internal MissingModule(MissingAssembly assembly)
+		internal MissingModule(Assembly assembly, int index)
 			: base(assembly.universe)
 		{
 			this.assembly = assembly;
+			this.index = index;
 		}
 
 		public override int MDStreamVersion
@@ -261,7 +281,14 @@ namespace IKVM.Reflection
 
 		public override string Name
 		{
-			get { throw new MissingModuleException(this); }
+			get
+			{
+				if (index == -1)
+				{
+					throw new MissingModuleException(this);
+				}
+				return assembly.ManifestModule.GetString(assembly.ManifestModule.File.records[index].Name);
+			}
 		}
 
 		public override Guid ModuleVersionId
@@ -343,6 +370,23 @@ namespace IKVM.Reflection
 		{
 			return new MissingModuleException(this);
 		}
+
+		public override byte[] __ModuleHash
+		{
+			get
+			{
+				if (index == -1)
+				{
+					throw new MissingModuleException(this);
+				}
+				if (assembly.ManifestModule.File.records[index].HashValue == 0)
+				{
+					return null;
+				}
+				IKVM.Reflection.Reader.ByteReader br = assembly.ManifestModule.GetBlob(assembly.ManifestModule.File.records[index].HashValue);
+				return br.ReadBytes(br.Length);
+			}
+		}
 	}
 
 	sealed class MissingType : Type
@@ -353,6 +397,8 @@ namespace IKVM.Reflection
 		private readonly string name;
 		private Type[] typeArgs;
 		private int token;
+		private int flags;
+		private bool cyclicTypeForwarder;
 
 		internal MissingType(Module module, Type declaringType, string ns, string name)
 		{
@@ -360,7 +406,17 @@ namespace IKVM.Reflection
 			this.declaringType = declaringType;
 			this.ns = ns;
 			this.name = name;
-			MarkEnumOrValueType(ns, name);
+			MarkKnownType(ns, name);
+
+			// HACK we need to handle the Windows Runtime projected types that change from ValueType to Class or v.v.
+			if (WindowsRuntimeProjection.IsProjectedValueType(ns, name, module))
+			{
+				typeFlags |= TypeFlags.ValueType;
+			}
+			else if (WindowsRuntimeProjection.IsProjectedReferenceType(ns, name, module))
+			{
+				typeFlags |= TypeFlags.NotValueType;
+			}
 		}
 
 		internal override MethodBase FindMethod(string name, MethodSignature signature)
@@ -398,14 +454,9 @@ namespace IKVM.Reflection
 			get { return declaringType; }
 		}
 
-		public override string __Name
+		internal override TypeName TypeName
 		{
-			get { return name; }
-		}
-
-		public override string __Namespace
-		{
-			get { return ns; }
+			get { return new TypeName(ns, name); }
 		}
 
 		public override string Name
@@ -438,6 +489,18 @@ namespace IKVM.Reflection
 						return true;
 					case TypeFlags.NotValueType:
 						return false;
+					case TypeFlags.ValueType | TypeFlags.NotValueType:
+						if (WindowsRuntimeProjection.IsProjectedValueType(ns, name, module))
+						{
+							typeFlags &= ~TypeFlags.NotValueType;
+							return true;
+						}
+						if (WindowsRuntimeProjection.IsProjectedReferenceType(ns, name, module))
+						{
+							typeFlags &= ~TypeFlags.ValueType;
+							return false;
+						}
+						goto default;
 					default:
 						if (module.universe.ResolveMissingTypeIsValueType(this))
 						{
@@ -512,9 +575,9 @@ namespace IKVM.Reflection
 			throw new MissingMemberException(this);
 		}
 
-		public override StructLayoutAttribute StructLayoutAttribute
+		public override bool __GetLayout(out int packingSize, out int typeSize)
 		{
-			get { throw new MissingMemberException(this); }
+			throw new MissingMemberException(this);
 		}
 
 		public override bool IsGenericType
@@ -545,15 +608,33 @@ namespace IKVM.Reflection
 			return this;
 		}
 
-		internal override Type SetMetadataTokenForMissing(int token)
+		internal override Type SetMetadataTokenForMissing(int token, int flags)
 		{
 			this.token = token;
+			this.flags = flags;
+			return this;
+		}
+
+		internal override Type SetCyclicTypeForwarder()
+		{
+			this.cyclicTypeForwarder = true;
 			return this;
 		}
 
 		internal override bool IsBaked
 		{
 			get { throw new MissingMemberException(this); }
+		}
+
+		public override bool __IsTypeForwarder
+		{
+			// CorTypeAttr.tdForwarder
+			get { return (flags & 0x00200000) != 0; }
+		}
+
+		public override bool __IsCyclicTypeForwarder
+		{
+			get { return cyclicTypeForwarder; }
 		}
 	}
 
@@ -562,7 +643,18 @@ namespace IKVM.Reflection
 		private readonly MemberInfo owner;
 		private readonly int index;
 
-		internal MissingTypeParameter(MemberInfo owner, int index)
+		internal MissingTypeParameter(Type owner, int index)
+			: this(owner, index, Signature.ELEMENT_TYPE_VAR)
+		{
+		}
+
+		internal MissingTypeParameter(MethodInfo owner, int index)
+			: this(owner, index, Signature.ELEMENT_TYPE_MVAR)
+		{
+		}
+
+		private MissingTypeParameter(MemberInfo owner, int index, byte sigElementType)
+			: base(sigElementType)
 		{
 			this.owner = owner;
 			this.index = index;

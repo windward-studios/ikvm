@@ -148,10 +148,10 @@ namespace IKVM.Internal
 			}
 		}
 
-		internal static MethodBuilder DefineTypeInitializer(TypeBuilder typeBuilder)
+		internal static MethodBuilder DefineTypeInitializer(TypeBuilder typeBuilder, ClassLoaderWrapper loader)
 		{
 			MethodAttributes attr = MethodAttributes.Static | MethodAttributes.RTSpecialName | MethodAttributes.SpecialName;
-			if (typeBuilder.IsInterface)
+			if (typeBuilder.IsInterface && loader.WorkaroundInterfacePrivateMethods)
 			{
 				// LAMESPEC the ECMA spec says (part. I, sect. 8.5.3.2) that all interface members must be public, so we make
 				// the class constructor public.
@@ -169,7 +169,7 @@ namespace IKVM.Internal
 
 		internal static bool MatchNameAndPublicKeyToken(AssemblyName name1, AssemblyName name2)
 		{
-			return name1.Name.Equals(name2.Name, StringComparison.InvariantCultureIgnoreCase)
+			return name1.Name.Equals(name2.Name, StringComparison.OrdinalIgnoreCase)
 				&& CompareKeys(name1.GetPublicKeyToken(), name2.GetPublicKeyToken());
 		}
 
@@ -209,5 +209,71 @@ namespace IKVM.Internal
 				&& !type.IsGenericTypeDefinition
 				&& !type.IsGenericParameter;
 		}
+
+		internal static bool MatchParameterInfos(ParameterInfo p1, ParameterInfo p2)
+		{
+			if (p1.ParameterType != p2.ParameterType)
+			{
+				return false;
+			}
+			if (!MatchTypes(p1.GetOptionalCustomModifiers(), p2.GetOptionalCustomModifiers()))
+			{
+				return false;
+			}
+			if (!MatchTypes(p1.GetRequiredCustomModifiers(), p2.GetRequiredCustomModifiers()))
+			{
+				return false;
+			}
+			return true;
+		}
+
+		private static bool MatchTypes(Type[] t1, Type[] t2)
+		{
+			if (t1.Length == t2.Length)
+			{
+				for (int i = 0; i < t1.Length; i++)
+				{
+					if (t1[i] != t2[i])
+					{
+						return false;
+					}
+				}
+				return true;
+			}
+			return false;
+		}
+
+#if STATIC_COMPILER
+		internal static Type GetMissingType(Type type)
+		{
+			while (type.HasElementType)
+			{
+				type = type.GetElementType();
+			}
+			if (type.__IsMissing)
+			{
+				return type;
+			}
+			else if (type.__ContainsMissingType)
+			{
+				if (type.IsGenericType)
+				{
+					foreach (Type arg in type.GetGenericArguments())
+					{
+						Type t1 = GetMissingType(arg);
+						if (t1.__IsMissing)
+						{
+							return t1;
+						}
+					}
+				}
+				throw new NotImplementedException(type.FullName);
+			}
+			else
+			{
+				return type;
+			}
+		}
+#endif
 	}
 }

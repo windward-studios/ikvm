@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2012 Jeroen Frijters
+  Copyright (C) 2002-2015 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -28,10 +28,12 @@ using IKVM.Reflection;
 using IKVM.Reflection.Emit;
 using Type = IKVM.Reflection.Type;
 using DynamicOrAotTypeWrapper = IKVM.Internal.AotTypeWrapper;
+using ProtectionDomain = System.Object;
 #else
 using System.Reflection;
 using System.Reflection.Emit;
 using DynamicOrAotTypeWrapper = IKVM.Internal.DynamicTypeWrapper;
+using ProtectionDomain = java.security.ProtectionDomain;
 #endif
 using System.Diagnostics;
 using System.Security;
@@ -43,7 +45,8 @@ namespace IKVM.Internal
 #if STATIC_COMPILER
 	abstract class DynamicTypeWrapper : TypeWrapper
 #else
-	class DynamicTypeWrapper : TypeWrapper
+#pragma warning disable 628 // don't complain about protected members in sealed type
+	sealed class DynamicTypeWrapper : TypeWrapper
 #endif
 	{
 #if STATIC_COMPILER
@@ -53,48 +56,89 @@ namespace IKVM.Internal
 #endif
 		private volatile DynamicImpl impl;
 		private readonly TypeWrapper baseTypeWrapper;
-		private TypeWrapper[] interfaces;
+		private readonly TypeWrapper[] interfaces;
 		private readonly string sourceFileName;
 #if !STATIC_COMPILER
 		private byte[][] lineNumberTables;
 #endif
-		private ConstructorInfo automagicSerializationCtor;
+		private MethodBase automagicSerializationCtor;
 
-		private static TypeWrapper LoadTypeWrapper(ClassLoaderWrapper classLoader, string name)
+		private TypeWrapper LoadTypeWrapper(ClassLoaderWrapper classLoader, ProtectionDomain pd, ClassFile.ConstantPoolItemClass clazz)
 		{
-			TypeWrapper tw = classLoader.LoadClassByDottedNameFast(name);
+			// check for patched constant pool items
+			TypeWrapper tw = clazz.GetClassType();
+			if (tw == null || tw == VerifierTypeWrapper.Null)
+			{
+				tw = classLoader.LoadClassByDottedNameFast(clazz.Name);
+			}
 			if (tw == null)
 			{
-				throw new NoClassDefFoundError(name);
+				throw new NoClassDefFoundError(clazz.Name);
 			}
+			CheckMissing(this, tw);
+			classLoader.CheckPackageAccess(tw, pd);
 			return tw;
 		}
 
+		private static void CheckMissing(TypeWrapper prev, TypeWrapper tw)
+		{
 #if STATIC_COMPILER
-		internal DynamicTypeWrapper(ClassFile f, CompilerClassLoader classLoader)
-#else
-		internal DynamicTypeWrapper(ClassFile f, ClassLoaderWrapper classLoader)
+			do
+			{
+				UnloadableTypeWrapper missing = tw as UnloadableTypeWrapper;
+				if (missing != null)
+				{
+					Type mt = ReflectUtil.GetMissingType(missing.MissingType);
+					if (mt.Assembly.__IsMissing)
+					{
+						throw new FatalCompilerErrorException(Message.MissingBaseTypeReference, mt.FullName, mt.Assembly.FullName);
+					}
+					throw new FatalCompilerErrorException(Message.MissingBaseType, mt.FullName, mt.Assembly.FullName,
+						prev.TypeAsBaseType.FullName, prev.TypeAsBaseType.Module.Name);
+				}
+				foreach (TypeWrapper iface in tw.Interfaces)
+				{
+					CheckMissing(tw, iface);
+				}
+				prev = tw;
+				tw = tw.BaseTypeWrapper;
+			}
+			while (tw != null);
 #endif
-			: base(f.Modifiers, f.Name)
+		}
+
+#if STATIC_COMPILER
+		internal DynamicTypeWrapper(TypeWrapper host, ClassFile f, CompilerClassLoader classLoader, ProtectionDomain pd)
+#else
+		internal DynamicTypeWrapper(TypeWrapper host, ClassFile f, ClassLoaderWrapper classLoader, ProtectionDomain pd)
+#endif
+			: base(f.IsInternal ? TypeFlags.InternalAccess : host != null ? TypeFlags.Anonymous : TypeFlags.None, f.Modifiers, f.Name)
 		{
 			Profiler.Count("DynamicTypeWrapper");
 			this.classLoader = classLoader;
-			this.IsInternal = f.IsInternal;
 			this.sourceFileName = f.SourceFileAttribute;
-			this.baseTypeWrapper = f.IsInterface ? null : LoadTypeWrapper(classLoader, f.SuperClass);
-			if (BaseTypeWrapper != null)
+			if (f.IsInterface)
 			{
+				// interfaces can't "override" final methods in object
+				foreach (ClassFile.Method method in f.Methods)
+				{
+					MethodWrapper mw;
+					if (method.IsVirtual
+						&& (mw = CoreClasses.java.lang.Object.Wrapper.GetMethodWrapper(method.Name, method.Signature, false)) != null
+						&& mw.IsVirtual
+						&& mw.IsFinal)
+					{
+						throw new VerifyError("class " + f.Name + " overrides final method " + method.Name + "." + method.Signature);
+					}
+				}
+			}
+			else
+			{
+				this.baseTypeWrapper = LoadTypeWrapper(classLoader, pd, f.SuperClass);
 				if (!BaseTypeWrapper.IsAccessibleFrom(this))
 				{
 					throw new IllegalAccessError("Class " + f.Name + " cannot access its superclass " + BaseTypeWrapper.Name);
 				}
-#if !STATIC_COMPILER
-				if (!BaseTypeWrapper.IsPublic && !ReflectUtil.IsFromAssembly(BaseTypeWrapper.TypeAsBaseType, classLoader.GetTypeWrapperFactory().ModuleBuilder.Assembly))
-				{
-					// NOTE this can only happen if evil code calls ClassLoader.defineClass() on an assembly class loader (which we allow for compatibility with other slightly less evil code)
-					throw new IllegalAccessError("Class " + f.Name + " cannot access its non-public superclass " + BaseTypeWrapper.Name + " from another assembly");
-				}
-#endif
 				if (BaseTypeWrapper.IsFinal)
 				{
 					throw new VerifyError("Class " + f.Name + " extends final class " + BaseTypeWrapper.Name);
@@ -135,28 +179,11 @@ namespace IKVM.Internal
 			this.interfaces = new TypeWrapper[interfaces.Length];
 			for (int i = 0; i < interfaces.Length; i++)
 			{
-				TypeWrapper iface = LoadTypeWrapper(classLoader, interfaces[i].Name);
+				TypeWrapper iface = LoadTypeWrapper(classLoader, pd, interfaces[i]);
 				if (!iface.IsAccessibleFrom(this))
 				{
 					throw new IllegalAccessError("Class " + f.Name + " cannot access its superinterface " + iface.Name);
 				}
-#if !STATIC_COMPILER
-				if (!iface.IsPublic && !ReflectUtil.IsFromAssembly(iface.TypeAsBaseType, classLoader.GetTypeWrapperFactory().ModuleBuilder.Assembly))
-				{
-					string proxyName = DynamicClassLoader.GetProxyHelperName(iface.TypeAsTBD);
-					Type proxyType = ReflectUtil.GetAssembly(iface.TypeAsBaseType).GetType(proxyName);
-					// FXBUG we need to check if the type returned is actually correct, because .NET 2.0 has a bug that
-					// causes it to return typeof(IFoo) for GetType("__<Proxy>+IFoo")
-					if (proxyType == null || proxyType.FullName != proxyName)
-					{
-						// NOTE this happens when you call Proxy.newProxyInstance() on a non-public .NET interface
-						// (for ikvmc compiled Java types, ikvmc generates public proxy stubs).
-						// NOTE we don't currently check interfaces inherited from other interfaces because mainstream .NET languages
-						// don't allow public interfaces extending non-public interfaces.
-						throw new IllegalAccessError("Class " + f.Name + " cannot access its non-public superinterface " + iface.Name + " from another assembly");
-					}
-				}
-#endif
 				if (!iface.IsInterface)
 				{
 					throw new IncompatibleClassChangeError("Implementing class");
@@ -164,7 +191,7 @@ namespace IKVM.Internal
 				this.interfaces[i] = iface;
 			}
 
-			impl = new JavaTypeImpl(f, this);
+			impl = new JavaTypeImpl(host, f, this);
 		}
 
 #if CLASSGC
@@ -406,7 +433,7 @@ namespace IKVM.Internal
 		{
 			get
 			{
-				return this.IsSubTypeOf(ClassLoaderWrapper.LoadClassCritical("java.io.Serializable"));
+				return this.IsSubTypeOf(CoreClasses.java.io.Serializable.Wrapper);
 			}
 		}
 
@@ -428,12 +455,19 @@ namespace IKVM.Internal
 			internal abstract object GetMethodDefaultValue(int index);
 			internal abstract object[] GetMethodAnnotations(int index);
 			internal abstract object[][] GetParameterAnnotations(int index);
+			internal abstract MethodParametersEntry[] GetMethodParameters(int index);
 			internal abstract object[] GetFieldAnnotations(int index);
 			internal abstract MethodInfo GetFinalizeMethod();
+			internal abstract object[] GetConstantPool();
+			internal abstract byte[] GetRawTypeAnnotations();
+			internal abstract byte[] GetMethodRawTypeAnnotations(int index);
+			internal abstract byte[] GetFieldRawTypeAnnotations(int index);
+			internal abstract TypeWrapper Host { get; }
 		}
 
 		private sealed class JavaTypeImpl : DynamicImpl
 		{
+			private readonly TypeWrapper host;
 			private readonly ClassFile classFile;
 			private readonly DynamicOrAotTypeWrapper wrapper;
 			private TypeBuilder typeBuilder;
@@ -444,28 +478,32 @@ namespace IKVM.Internal
 			private bool finishInProgress;
 			private MethodBuilder clinitMethod;
 			private MethodBuilder finalizeMethod;
+			private int recursionCount;
 #if STATIC_COMPILER
-			private DynamicTypeWrapper outerClassWrapper;
+			private DynamicTypeWrapper enclosingClassWrapper;
 			private AnnotationBuilder annotationBuilder;
 			private TypeBuilder enumBuilder;
+			private TypeBuilder privateInterfaceMethods;
 			private Dictionary<string, TypeWrapper> nestedTypeNames;	// only keys are used, values are always null
 #endif
 
-			internal JavaTypeImpl(ClassFile f, DynamicTypeWrapper wrapper)
+			internal JavaTypeImpl(TypeWrapper host, ClassFile f, DynamicTypeWrapper wrapper)
 			{
 				Tracer.Info(Tracer.Compiler, "constructing JavaTypeImpl for " + f.Name);
+				this.host = host;
 				this.classFile = f;
 				this.wrapper = (DynamicOrAotTypeWrapper)wrapper;
 			}
 
 			internal void CreateStep1()
 			{
-				// process all methods
+				// process all methods (needs to be done first, because property fields depend on being able to lookup the accessor methods)
 				bool hasclinit = wrapper.BaseTypeWrapper == null ? false : wrapper.BaseTypeWrapper.HasStaticInitializer;
 				methods = new MethodWrapper[classFile.Methods.Length];
 				baseMethods = new MethodWrapper[classFile.Methods.Length][];
 				for (int i = 0; i < methods.Length; i++)
 				{
+					MemberFlags flags = MemberFlags.None;
 					ClassFile.Method m = classFile.Methods[i];
 					if (m.IsClassInitializer)
 					{
@@ -473,12 +511,9 @@ namespace IKVM.Internal
 						bool noop;
 						if (IsSideEffectFreeStaticInitializerOrNoop(m, out noop))
 						{
-							// because we cannot affect serialVersionUID computation (which is the only way the presence of a <clinit> can surface)
-							// we cannot do this optimization if the class is serializable but doesn't have a serialVersionUID
-							if (noop && (!wrapper.IsSerializable || classFile.HasSerialVersionUID))
+							if (noop)
 							{
-								methods[i] = new DummyMethodWrapper(wrapper);
-								continue;
+								flags |= MemberFlags.NoOp;
 							}
 						}
 						else
@@ -489,31 +524,41 @@ namespace IKVM.Internal
 						hasclinit = true;
 #endif
 					}
-					MemberFlags flags = MemberFlags.None;
 					if (m.IsInternal)
 					{
 						flags |= MemberFlags.InternalAccess;
 					}
-					// we only support HasCallerID instance methods on final types, because we don't support interface stubs with CallerID
-					if (m.HasCallerIDAnnotation
-						&& (m.IsStatic || classFile.IsFinal)
-						&& CoreClasses.java.lang.Object.Wrapper.InternalsVisibleTo(wrapper))
+#if STATIC_COMPILER
+					if (m.IsCallerSensitive && SupportsCallerID(m))
 					{
 						flags |= MemberFlags.CallerID;
 					}
-					if (wrapper.IsGhost)
+#endif
+					if (wrapper.IsGhost && m.IsVirtual)
 					{
+						// note that a GhostMethodWrapper can also represent a default interface method
 						methods[i] = new GhostMethodWrapper(wrapper, m.Name, m.Signature, null, null, null, null, m.Modifiers, flags);
 					}
 					else if (m.IsConstructor && wrapper.IsDelegate)
 					{
 						methods[i] = new DelegateConstructorMethodWrapper(wrapper, m);
 					}
+					else if (classFile.IsInterface && !m.IsStatic && !m.IsPublic)
+					{
+						// we can't use callvirt to call interface private instance methods (because we have to compile them as static methods,
+						// since the CLR doesn't support interface instance methods), so need a special MethodWrapper
+						methods[i] = new PrivateInterfaceMethodWrapper(wrapper, m.Name, m.Signature, null, null, null, m.Modifiers, flags);
+					}
+					else if (classFile.IsInterface && m.IsVirtual && !m.IsAbstract)
+					{
+						// note that a GhostMethodWrapper can also represent a default interface method
+						methods[i] = new DefaultInterfaceMethodWrapper(wrapper, m.Name, m.Signature, null, null, null, null, m.Modifiers, flags);
+					}
 					else
 					{
-						if (!classFile.IsInterface && !m.IsStatic && !m.IsPrivate && !m.IsConstructor)
+						if (!classFile.IsInterface && m.IsVirtual)
 						{
-							bool explicitOverride = false;
+							bool explicitOverride;
 							baseMethods[i] = FindBaseMethods(m, out explicitOverride);
 							if (explicitOverride)
 							{
@@ -523,8 +568,11 @@ namespace IKVM.Internal
 						methods[i] = new TypicalMethodWrapper(wrapper, m.Name, m.Signature, null, null, null, m.Modifiers, flags);
 					}
 				}
-				wrapper.HasStaticInitializer = hasclinit;
-				if (wrapper.IsAbstract && (!wrapper.IsInterface || wrapper.IsPublic))
+				if (hasclinit)
+				{
+					wrapper.SetHasStaticInitializer();
+				}
+				if (!wrapper.IsInterface || wrapper.IsPublic)
 				{
 					List<MethodWrapper> methodsArray = new List<MethodWrapper>(methods);
 					List<MethodWrapper[]> baseMethodsArray = new List<MethodWrapper[]>(baseMethods);
@@ -546,7 +594,7 @@ namespace IKVM.Internal
 					{
 						TypeWrapper fieldType = null;
 #if !STATIC_COMPILER
-						fieldType = ClassLoaderWrapper.GetBootstrapClassLoader().FieldTypeWrapperFromSig(fld.Signature);
+						fieldType = ClassLoaderWrapper.GetBootstrapClassLoader().FieldTypeWrapperFromSig(fld.Signature, LoadMode.LoadOrThrow);
 #endif
 						fields[i] = new ConstantFieldWrapper(wrapper, fieldType, fld.Name, fld.Signature, fld.Modifiers, null, fld.ConstantValue, MemberFlags.None);
 					}
@@ -564,6 +612,63 @@ namespace IKVM.Internal
 #endif
 				wrapper.SetFields(fields);
 			}
+
+#if STATIC_COMPILER
+			private bool SupportsCallerID(ClassFile.Method method)
+			{
+				if ((classFile.Name == "sun.reflect.Reflection" && method.Name == "getCallerClass")
+					|| (classFile.Name == "java.lang.SecurityManager" && method.Name == "checkMemberAccess"))
+				{
+					// ignore CallerSensitive on methods that don't need CallerID parameter
+					return false;
+				}
+				else if (method.IsStatic)
+				{
+					return true;
+				}
+				else if ((classFile.IsFinal || classFile.Name == "java.lang.Runtime" || classFile.Name == "java.io.ObjectStreamClass")
+					&& wrapper.BaseTypeWrapper.GetMethodWrapper(method.Name, method.Signature, true) == null
+					&& !HasInterfaceMethod(wrapper, method.Name, method.Signature))
+				{
+					// We only support CallerID instance methods on final or effectively final types,
+					// because we don't support interface stubs with CallerID.
+					// We also don't support a CallerID method overriding a method or implementing an interface.
+					return true;
+				}
+				else if (RequiresDynamicReflectionCallerClass(classFile.Name, method.Name, method.Signature))
+				{
+					// We don't support CallerID for virtual methods that can be overridden or implement an interface,
+					// so these methods will do a dynamic stack walk if when Reflection.getCallerClass() is used.
+					return false;
+				}
+				else
+				{
+					// If we end up here, we either have to add support or add them to the white-list in the above clause
+					// to allow them to fall back to dynamic stack walking.
+					StaticCompiler.IssueMessage(Message.CallerSensitiveOnUnsupportedMethod, classFile.Name, method.Name, method.Signature);
+					return false;
+				}
+			}
+
+			private static bool HasInterfaceMethod(TypeWrapper tw, string name, string signature)
+			{
+				for (; tw != null; tw = tw.BaseTypeWrapper)
+				{
+					foreach (TypeWrapper iface in tw.Interfaces)
+					{
+						if (iface.GetMethodWrapper(name, signature, false) != null)
+						{
+							return true;
+						}
+						if (HasInterfaceMethod(iface, name, signature))
+						{
+							return true;
+						}
+					}
+				}
+				return false;
+			}
+#endif
 
 			internal void CreateStep2()
 			{
@@ -599,50 +704,58 @@ namespace IKVM.Internal
 #if STATIC_COMPILER
 					bool cantNest = false;
 					bool setModifiers = false;
-					TypeBuilder outer = null;
+					TypeBuilder enclosing = null;
+					string enclosingClassName = null;
 					// we only compile inner classes as nested types in the static compiler, because it has a higher cost
 					// and doesn't buy us anything in dynamic mode (and if fact, due to an FXBUG it would make handling
 					// the TypeResolve event very hard)
 					ClassFile.InnerClass outerClass = getOuterClass();
 					if (outerClass.outerClass != 0)
 					{
-						string outerClassName = classFile.GetConstantPoolClass(outerClass.outerClass);
-						if (!CheckInnerOuterNames(f.Name, outerClassName))
+						enclosingClassName = classFile.GetConstantPoolClass(outerClass.outerClass);
+					}
+					else if (f.EnclosingMethod != null)
+					{
+						enclosingClassName = f.EnclosingMethod[0];
+					}
+					if (enclosingClassName != null)
+					{
+						if (!CheckInnerOuterNames(f.Name, enclosingClassName))
 						{
-							Tracer.Warning(Tracer.Compiler, "Incorrect InnerClasses attribute on {0}", f.Name);
+							Tracer.Warning(Tracer.Compiler, "Incorrect {0} attribute on {1}", outerClass.outerClass != 0 ? "InnerClasses" : "EnclosingMethod", f.Name);
 						}
 						else
 						{
 							try
 							{
-								outerClassWrapper = wrapper.classLoader.LoadClassByDottedNameFast(outerClassName) as DynamicTypeWrapper;
+								enclosingClassWrapper = wrapper.classLoader.LoadClassByDottedNameFast(enclosingClassName) as DynamicTypeWrapper;
 							}
 							catch (RetargetableJavaException x)
 							{
-								Tracer.Warning(Tracer.Compiler, "Unable to load outer class {0} for inner class {1} ({2}: {3})", outerClassName, f.Name, x.GetType().Name, x.Message);
+								Tracer.Warning(Tracer.Compiler, "Unable to load outer class {0} for inner class {1} ({2}: {3})", enclosingClassName, f.Name, x.GetType().Name, x.Message);
 							}
-							if (outerClassWrapper != null)
+							if (enclosingClassWrapper != null)
 							{
 								// make sure the relationship is reciprocal (otherwise we run the risk of
 								// baking the outer type before the inner type) and that the inner and outer
 								// class live in the same class loader (when doing a multi target compilation,
-								// it is possible to split the two classes acros assemblies)
-								JavaTypeImpl oimpl = outerClassWrapper.impl as JavaTypeImpl;
-								if (oimpl != null && outerClassWrapper.GetClassLoader() == wrapper.GetClassLoader())
+								// it is possible to split the two classes across assemblies)
+								JavaTypeImpl oimpl = enclosingClassWrapper.impl as JavaTypeImpl;
+								if (oimpl != null && enclosingClassWrapper.GetClassLoader() == wrapper.GetClassLoader())
 								{
 									ClassFile outerClassFile = oimpl.classFile;
 									ClassFile.InnerClass[] outerInnerClasses = outerClassFile.InnerClasses;
 									if (outerInnerClasses == null)
 									{
-										outerClassWrapper = null;
+										enclosingClassWrapper = null;
 									}
 									else
 									{
 										bool ok = false;
 										for (int i = 0; i < outerInnerClasses.Length; i++)
 										{
-											if (outerInnerClasses[i].outerClass != 0
-												&& outerClassFile.GetConstantPoolClass(outerInnerClasses[i].outerClass) == outerClassFile.Name
+											if (((outerInnerClasses[i].outerClass != 0 && outerClassFile.GetConstantPoolClass(outerInnerClasses[i].outerClass) == outerClassFile.Name)
+													|| (outerInnerClasses[i].outerClass == 0 && outerClass.outerClass == 0))
 												&& outerInnerClasses[i].innerClass != 0
 												&& outerClassFile.GetConstantPoolClass(outerInnerClasses[i].innerClass) == f.Name)
 											{
@@ -652,18 +765,23 @@ namespace IKVM.Internal
 										}
 										if (!ok)
 										{
-											outerClassWrapper = null;
+											enclosingClassWrapper = null;
 										}
 									}
 								}
 								else
 								{
-									outerClassWrapper = null;
+									enclosingClassWrapper = null;
 								}
-								if (outerClassWrapper != null)
+								if (enclosingClassWrapper != null)
 								{
-									outerClassWrapper.CreateStep2();
-									outer = oimpl.typeBuilder;
+									enclosingClassWrapper.CreateStep2();
+									enclosing = oimpl.typeBuilder;
+									if (outerClass.outerClass == 0)
+									{
+										// we need to record that we're not an inner classes, but an enclosed class
+										typeAttribs |= TypeAttributes.SpecialName;
+									}
 								}
 								else
 								{
@@ -674,9 +792,9 @@ namespace IKVM.Internal
 					}
 					if (f.IsPublic)
 					{
-						if (outer != null)
+						if (enclosing != null)
 						{
-							if (outerClassWrapper.IsPublic)
+							if (enclosingClassWrapper.IsPublic)
 							{
 								typeAttribs |= TypeAttributes.NestedPublic;
 							}
@@ -693,7 +811,7 @@ namespace IKVM.Internal
 							typeAttribs |= TypeAttributes.Public;
 						}
 					}
-					else if (outer != null)
+					else if (enclosing != null)
 					{
 						typeAttribs |= TypeAttributes.NestedAssembly;
 					}
@@ -711,7 +829,7 @@ namespace IKVM.Internal
 						setModifiers |= (f.Modifiers & (Modifiers)0x99CE) != 0;
 						// by default we assume interfaces are abstract, so in the exceptional case we need a ModifiersAttribute
 						setModifiers |= (f.Modifiers & Modifiers.Abstract) == 0;
-						if (outer != null && !cantNest)
+						if (enclosing != null && !cantNest)
 						{
 							if (wrapper.IsGhost)
 							{
@@ -721,7 +839,7 @@ namespace IKVM.Internal
 							}
 							// LAMESPEC the CLI spec says interfaces cannot contain nested types (Part.II, 9.6), but that rule isn't enforced
 							// (and broken by J# as well), so we'll just ignore it too.
-							typeBuilder = outer.DefineNestedType(GetInnerClassName(outerClassWrapper.Name, f.Name), typeAttribs);
+							typeBuilder = enclosing.DefineNestedType(AllocNestedTypeName(enclosingClassWrapper.Name, f.Name), typeAttribs);
 						}
 						else
 						{
@@ -746,17 +864,11 @@ namespace IKVM.Internal
 						setModifiers |= (f.Modifiers & (Modifiers)0x99CE) != 0;
 						// by default we assume ACC_SUPER for classes, so in the exceptional case we need a ModifiersAttribute
 						setModifiers |= !f.IsSuper;
-						if (f.IsEffectivelyFinal)
-						{
-							setModifiers = true;
-							typeAttribs |= TypeAttributes.Sealed;
-							Tracer.Info(Tracer.Compiler, "Sealing type {0}", f.Name);
-						}
-						if (outer != null && !cantNest)
+						if (enclosing != null && !cantNest)
 						{
 							// LAMESPEC the CLI spec says interfaces cannot contain nested types (Part.II, 9.6), but that rule isn't enforced
 							// (and broken by J# as well), so we'll just ignore it too.
-							typeBuilder = outer.DefineNestedType(GetInnerClassName(outerClassWrapper.Name, f.Name), typeAttribs);
+							typeBuilder = enclosing.DefineNestedType(AllocNestedTypeName(enclosingClassWrapper.Name, f.Name), typeAttribs);
 						}
 						else
 #endif // STATIC_COMPILER
@@ -768,15 +880,33 @@ namespace IKVM.Internal
 					// When we're statically compiling, we associate the typeBuilder with the wrapper. This enables types in referenced assemblies to refer back to
 					// types that we're currently compiling (i.e. a cyclic dependency between the currently assembly we're compiling and a referenced assembly).
 					wrapper.GetClassLoader().SetWrapperForType(typeBuilder, wrapper);
-					if (outer != null && cantNest)
+					if (outerClass.outerClass != 0)
 					{
-						AttributeHelper.SetNonNestedOuterClass(typeBuilder, outerClassWrapper.Name);
-						AttributeHelper.SetNonNestedInnerClass(outer, f.Name);
+						if (enclosing != null && cantNest)
+						{
+							AttributeHelper.SetNonNestedInnerClass(enclosing, f.Name);
+						}
+						if (enclosing == null || cantNest)
+						{
+							AttributeHelper.SetNonNestedOuterClass(typeBuilder, enclosingClassName);
+						}
 					}
-					if (outer == null && mangledTypeName != wrapper.Name)
+					if (classFile.InnerClasses != null)
 					{
-						// HACK we abuse the InnerClassAttribute to record to real name
-						AttributeHelper.SetInnerClass(typeBuilder, wrapper.Name, wrapper.Modifiers);
+						foreach (ClassFile.InnerClass inner in classFile.InnerClasses)
+						{
+							string name = classFile.GetConstantPoolClass(inner.innerClass);
+							bool exists = false;
+							try
+							{
+								exists = wrapper.GetClassLoader().LoadClassByDottedNameFast(name) != null;
+							}
+							catch (RetargetableJavaException) { }
+							if (!exists)
+							{
+								AttributeHelper.SetNonNestedInnerClass(typeBuilder, name);
+							}
+						}
 					}
 					if (typeBuilder.FullName != wrapper.Name
 						&& wrapper.Name.Replace('$', '+') != typeBuilder.FullName)
@@ -785,54 +915,17 @@ namespace IKVM.Internal
 					}
 					if (f.IsAnnotation && Annotation.HasRetentionPolicyRuntime(f.Annotations))
 					{
-						annotationBuilder = new AnnotationBuilder(this, outer);
+						annotationBuilder = new AnnotationBuilder(this, enclosing);
 						wrapper.SetAnnotation(annotationBuilder);
 					}
 					// For Java 5 Enum types, we generate a nested .NET enum.
 					// This is primarily to support annotations that take enum parameters.
 					if (f.IsEnum && f.IsPublic)
 					{
-						CompilerClassLoader ccl = wrapper.classLoader;
-						string name = "__Enum";
-						while (!ccl.ReserveName(f.Name + "$" + name))
-						{
-							name += "_";
-						}
-						enumBuilder = typeBuilder.DefineNestedType(name, TypeAttributes.Class | TypeAttributes.Sealed | TypeAttributes.NestedPublic | TypeAttributes.Serializable, Types.Enum);
-						AttributeHelper.HideFromJava(enumBuilder);
-						enumBuilder.DefineField("value__", Types.Int32, FieldAttributes.Public | FieldAttributes.SpecialName | FieldAttributes.RTSpecialName);
-						for (int i = 0; i < f.Fields.Length; i++)
-						{
-							if (f.Fields[i].IsEnum)
-							{
-								FieldBuilder fieldBuilder = enumBuilder.DefineField(f.Fields[i].Name, enumBuilder, FieldAttributes.Public | FieldAttributes.Static | FieldAttributes.Literal);
-								fieldBuilder.SetConstant(i);
-							}
-						}
-						wrapper.SetEnumType(enumBuilder);
+						AddCliEnum();
 					}
-					TypeWrapper[] interfaces = wrapper.Interfaces;
-					string[] implements = new string[interfaces.Length];
-					for (int i = 0; i < implements.Length; i++)
-					{
-						implements[i] = interfaces[i].Name;
-					}
-					if (outer != null)
-					{
-						Modifiers innerClassModifiers = outerClass.accessFlags;
-						string innerClassName = classFile.GetConstantPoolClass(outerClass.innerClass);
-						if (innerClassName == classFile.Name && innerClassName == outerClassWrapper.Name + "$" + typeBuilder.Name)
-						{
-							innerClassName = null;
-						}
-						AttributeHelper.SetInnerClass(typeBuilder, innerClassName, innerClassModifiers);
-					}
-					else if (outerClass.innerClass != 0)
-					{
-						AttributeHelper.SetInnerClass(typeBuilder, null, outerClass.accessFlags);
-					}
-					AttributeHelper.SetImplementsAttribute(typeBuilder, interfaces);
-					if (classFile.DeprecatedAttribute)
+					AddInnerClassAttribute(enclosing != null, outerClass.innerClass != 0, mangledTypeName, outerClass.accessFlags);
+					if (classFile.DeprecatedAttribute && !Annotation.HasObsoleteAttribute(classFile.Annotations))
 					{
 						AttributeHelper.SetDeprecatedAttribute(typeBuilder);
 					}
@@ -842,13 +935,30 @@ namespace IKVM.Internal
 					}
 					if (classFile.EnclosingMethod != null)
 					{
-						AttributeHelper.SetEnclosingMethodAttribute(typeBuilder, classFile.EnclosingMethod[0], classFile.EnclosingMethod[1], classFile.EnclosingMethod[2]);
+						if (outerClass.outerClass == 0 && enclosing != null && !cantNest)
+						{
+							// we don't need to record the enclosing type, if we're compiling the current type as a nested type because of the EnclosingMethod attribute
+							AttributeHelper.SetEnclosingMethodAttribute(typeBuilder, null, classFile.EnclosingMethod[1], classFile.EnclosingMethod[2]);
+						}
+						else
+						{
+							AttributeHelper.SetEnclosingMethodAttribute(typeBuilder, classFile.EnclosingMethod[0], classFile.EnclosingMethod[1], classFile.EnclosingMethod[2]);
+						}
+					}
+					if (classFile.RuntimeVisibleTypeAnnotations != null)
+					{
+						AttributeHelper.SetRuntimeVisibleTypeAnnotationsAttribute(typeBuilder, classFile.RuntimeVisibleTypeAnnotations);
 					}
 					if (wrapper.classLoader.EmitStackTraceInfo)
 					{
 						if (f.SourceFileAttribute != null)
 						{
-							if (f.SourceFileAttribute != typeBuilder.Name + ".java")
+							if ((enclosingClassWrapper == null && f.SourceFileAttribute == typeBuilder.Name + ".java")
+								|| (enclosingClassWrapper != null && f.SourceFileAttribute == enclosingClassWrapper.sourceFileName))
+							{
+								// we don't need to record the name because it matches our heuristic
+							}
+							else
 							{
 								AttributeHelper.SetSourceFile(typeBuilder, f.SourceFileAttribute);
 							}
@@ -866,33 +976,7 @@ namespace IKVM.Internal
 #endif // STATIC_COMPILER
 					if (hasclinit)
 					{
-						// We create a empty method that we can use to trigger our .cctor
-						// (previously we used RuntimeHelpers.RunClassConstructor, but that is slow and requires additional privileges)
-						MethodAttributes attribs = MethodAttributes.Static | MethodAttributes.SpecialName;
-						if (classFile.IsAbstract)
-						{
-							bool hasfields = false;
-							// If we have any public static fields, the cctor trigger must (and may) be public as well
-							foreach (ClassFile.Field fld in classFile.Fields)
-							{
-								if (fld.IsPublic && fld.IsStatic)
-								{
-									hasfields = true;
-									break;
-								}
-							}
-							attribs |= hasfields ? MethodAttributes.Public : MethodAttributes.FamORAssem;
-						}
-						else
-						{
-							attribs |= MethodAttributes.Public;
-						}
-						clinitMethod = typeBuilder.DefineMethod("__<clinit>", attribs, null, null);
-						clinitMethod.GetILGenerator().Emit(OpCodes.Ret);
-						// FXBUG on .NET 2.0 RTM x64 the JIT sometimes throws an InvalidProgramException while trying to inline this method,
-						// so we prevent inlining for now (it also turns out that on x86 not inlining this method actually has a positive perf impact in some cases...)
-						// http://connect.microsoft.com/VisualStudio/feedback/ViewFeedback.aspx?FeedbackID=285772
-						clinitMethod.SetImplementationFlags(clinitMethod.GetMethodImplementationFlags() | MethodImplAttributes.NoInlining);
+						AddClinitTrigger();
 					}
 					if (HasStructLayoutAttributeAnnotation(classFile))
 					{
@@ -914,9 +998,87 @@ namespace IKVM.Internal
 #endif
 			}
 
+#if STATIC_COMPILER
+			private void AddInnerClassAttribute(bool isNestedType, bool isInnerClass, string mangledTypeName, Modifiers innerClassFlags)
+			{
+				string name = classFile.Name;
+
+				if (isNestedType)
+				{
+					if (name == enclosingClassWrapper.Name + "$" + typeBuilder.Name)
+					{
+						name = null;
+					}
+				}
+				else if (name == mangledTypeName)
+				{
+					name = null;
+				}
+
+				if ((isInnerClass && CompiledTypeWrapper.PredictReflectiveModifiers(wrapper) != innerClassFlags) || name != null)
+				{
+					// HACK we abuse the InnerClassAttribute to record to real name for non-inner classes as well
+					AttributeHelper.SetInnerClass(typeBuilder, name, isInnerClass ? innerClassFlags : wrapper.Modifiers);
+				}
+			}
+
+			private void AddCliEnum()
+			{
+				CompilerClassLoader ccl = wrapper.classLoader;
+				string name = "__Enum";
+				while (!ccl.ReserveName(classFile.Name + "$" + name))
+				{
+					name += "_";
+				}
+				enumBuilder = typeBuilder.DefineNestedType(name, TypeAttributes.Class | TypeAttributes.Sealed | TypeAttributes.NestedPublic | TypeAttributes.Serializable, Types.Enum);
+				AttributeHelper.HideFromJava(enumBuilder);
+				enumBuilder.DefineField("value__", Types.Int32, FieldAttributes.Public | FieldAttributes.SpecialName | FieldAttributes.RTSpecialName);
+				for (int i = 0; i < classFile.Fields.Length; i++)
+				{
+					if (classFile.Fields[i].IsEnum)
+					{
+						FieldBuilder fieldBuilder = enumBuilder.DefineField(classFile.Fields[i].Name, enumBuilder, FieldAttributes.Public | FieldAttributes.Static | FieldAttributes.Literal);
+						fieldBuilder.SetConstant(i);
+					}
+				}
+				wrapper.SetEnumType(enumBuilder);
+			}
+#endif
+
+			private void AddClinitTrigger()
+			{
+				// We create a empty method that we can use to trigger our .cctor
+				// (previously we used RuntimeHelpers.RunClassConstructor, but that is slow and requires additional privileges)
+				MethodAttributes attribs = MethodAttributes.Static | MethodAttributes.SpecialName;
+				if (classFile.IsAbstract)
+				{
+					bool hasfields = false;
+					// If we have any public static fields, the cctor trigger must (and may) be public as well
+					foreach (ClassFile.Field fld in classFile.Fields)
+					{
+						if (fld.IsPublic && fld.IsStatic)
+						{
+							hasfields = true;
+							break;
+						}
+					}
+					attribs |= hasfields ? MethodAttributes.Public : MethodAttributes.FamORAssem;
+				}
+				else
+				{
+					attribs |= MethodAttributes.Public;
+				}
+				clinitMethod = typeBuilder.DefineMethod("__<clinit>", attribs, null, null);
+				clinitMethod.GetILGenerator().Emit(OpCodes.Ret);
+				// FXBUG on .NET 2.0 RTM x64 the JIT sometimes throws an InvalidProgramException while trying to inline this method,
+				// so we prevent inlining for now (it also turns out that on x86 not inlining this method actually has a positive perf impact in some cases...)
+				// http://connect.microsoft.com/VisualStudio/feedback/ViewFeedback.aspx?FeedbackID=285772
+				clinitMethod.SetImplementationFlags(clinitMethod.GetMethodImplementationFlags() | MethodImplAttributes.NoInlining);
+			}
+
 			private sealed class DelegateConstructorMethodWrapper : MethodWrapper
 			{
-				private ConstructorBuilder constructor;
+				private MethodBuilder constructor;
 				private MethodInfo invoke;
 
 				internal DelegateConstructorMethodWrapper(DynamicTypeWrapper tw, ClassFile.Method m)
@@ -927,7 +1089,7 @@ namespace IKVM.Internal
 				internal void DoLink(TypeBuilder typeBuilder)
 				{
 					MethodAttributes attribs = MethodAttributes.HideBySig | MethodAttributes.Public;
-					constructor = typeBuilder.DefineConstructor(attribs, CallingConventions.Standard, new Type[] { Types.Object, Types.IntPtr }, null, null);
+					constructor = ReflectUtil.DefineConstructor(typeBuilder, attribs, new Type[] { Types.Object, Types.IntPtr });
 					constructor.SetImplementationFlags(MethodImplAttributes.Runtime);
 					MethodWrapper mw = GetParameters()[0].GetMethods()[0];
 					mw.Link();
@@ -985,7 +1147,20 @@ namespace IKVM.Internal
 				noop = true;
 				for (int i = 0; i < m.Instructions.Length; i++)
 				{
-					NormalizedByteCode bc = m.Instructions[i].NormalizedOpCode;
+					NormalizedByteCode bc;
+					while ((bc = m.Instructions[i].NormalizedOpCode) == NormalizedByteCode.__goto)
+					{
+						int target = m.Instructions[i].TargetIndex;
+						if (target <= i)
+						{
+							// backward branch means we can't do anything
+							noop = false;
+							return false;
+						}
+						// we must skip the unused instructions because the "remove assertions" optimization
+						// uses a goto to remove the (now unused) code
+						i = target;
+					}
 					if (bc == NormalizedByteCode.__getstatic || bc == NormalizedByteCode.__putstatic)
 					{
 						ClassFile.ConstantPoolItemFieldref fld = classFile.SafeGetFieldref(m.Instructions[i].Arg1);
@@ -1001,28 +1176,25 @@ namespace IKVM.Internal
 							noop = false;
 							return false;
 						}
+						ClassFile.Field field = classFile.GetField(fld.Name, fld.Signature);
+						if (field == null)
+						{
+							noop = false;
+							return false;
+						}
 						if (bc == NormalizedByteCode.__putstatic)
 						{
-							ClassFile.Field field = classFile.GetField(fld.Name, fld.Signature);
-							if (field == null)
+							if (field.IsProperty && field.PropertySetter != null)
 							{
 								noop = false;
 								return false;
 							}
-							if (!field.IsFinal || !field.IsStatic || !field.IsProperty || field.PropertySetter != null)
-							{
-								noop = false;
-							}
 						}
-					}
-					else if (bc == NormalizedByteCode.__areturn ||
-						bc == NormalizedByteCode.__ireturn ||
-						bc == NormalizedByteCode.__lreturn ||
-						bc == NormalizedByteCode.__freturn ||
-						bc == NormalizedByteCode.__dreturn)
-					{
-						noop = false;
-						return false;
+						else if (field.IsProperty && field.PropertyGetter != null)
+						{
+							noop = false;
+							return false;
+						}
 					}
 					else if (ByteCodeMetaData.CanThrowException(bc))
 					{
@@ -1030,6 +1202,7 @@ namespace IKVM.Internal
 						return false;
 					}
 					else if (bc == NormalizedByteCode.__aconst_null
+						|| (bc == NormalizedByteCode.__iconst && m.Instructions[i].Arg1 == 0)
 						|| bc == NormalizedByteCode.__return
 						|| bc == NormalizedByteCode.__nop)
 					{
@@ -1044,7 +1217,7 @@ namespace IKVM.Internal
 				// we know that the verifier won't try to load any types (which isn't allowed at this time)
 				try
 				{
-					new MethodAnalyzer(wrapper, null, classFile, m, wrapper.classLoader);
+					new MethodAnalyzer(null, wrapper, null, classFile, m, wrapper.classLoader);
 					return true;
 				}
 				catch (VerifyError)
@@ -1092,18 +1265,23 @@ namespace IKVM.Internal
 					AddMirandaMethods(methods, baseMethods, iface);
 					foreach (MethodWrapper ifmethod in iface.GetMethods())
 					{
-						// skip <clinit>
-						if (!ifmethod.IsStatic)
+						// skip <clinit> and non-virtual interface methods introduced in Java 8
+						if (ifmethod.IsVirtual)
 						{
 							TypeWrapper lookup = wrapper;
 							while (lookup != null)
 							{
 								MethodWrapper mw = GetMethodWrapperDuringCtor(lookup, methods, ifmethod.Name, ifmethod.Signature);
-								if (mw == null)
+								if (mw == null || (mw.IsMirandaMethod && mw.DeclaringType != wrapper))
 								{
-									mw = new TypicalMethodWrapper(wrapper, ifmethod.Name, ifmethod.Signature, null, null, null, Modifiers.Public | Modifiers.Abstract, MemberFlags.HideFromReflection | MemberFlags.MirandaMethod);
+									mw = MirandaMethodWrapper.Create(wrapper, ifmethod);
 									methods.Add(mw);
 									baseMethods.Add(new MethodWrapper[] { ifmethod });
+									break;
+								}
+								if (mw.IsMirandaMethod && mw.DeclaringType == wrapper)
+								{
+									methods[methods.IndexOf(mw)] = ((MirandaMethodWrapper)mw).Update(ifmethod);
 									break;
 								}
 								if (!mw.IsStatic || mw.DeclaringType == wrapper)
@@ -1128,8 +1306,7 @@ namespace IKVM.Internal
 						MethodWrapper mw = new DelegateInvokeStubMethodWrapper(wrapper, iface.DeclaringTypeWrapper.TypeAsBaseType, iface.GetMethods()[0].Signature);
 						if (GetMethodWrapperDuringCtor(wrapper, methods, mw.Name, mw.Signature) == null)
 						{
-							Array.Resize(ref methods, methods.Length + 1);
-							methods[methods.Length - 1] = mw;
+							methods = ArrayUtil.Concat(methods, mw);
 						}
 					}
 					AddDelegateInvokeStubs(iface, ref methods);
@@ -1237,10 +1414,10 @@ namespace IKVM.Internal
 			private static bool CheckInnerOuterNames(string inner, string outer)
 			{
 				// do some sanity checks on the inner/outer class names
-				return inner.Length > outer.Length + 1 && inner[outer.Length] == '$' && inner.StartsWith(outer);
+				return inner.Length > outer.Length + 1 && inner[outer.Length] == '$' && inner.StartsWith(outer, StringComparison.Ordinal);
 			}
 
-			private string GetInnerClassName(string outer, string inner)
+			private string AllocNestedTypeName(string outer, string inner)
 			{
 				Debug.Assert(CheckInnerOuterNames(inner, outer));
 				if (nestedTypeNames == null)
@@ -1265,14 +1442,6 @@ namespace IKVM.Internal
 
 			private static void CheckLoaderConstraints(MethodWrapper mw, MethodWrapper baseMethod)
 			{
-#if !STATIC_COMPILER
-				if (JVM.FinishingForDebugSave)
-				{
-					// when we're finishing types to save a debug image (in dynamic mode) we don't care about loader constraints anymore
-					// (and we can't throw a LinkageError, because that would prevent the debug image from being saved)
-					return;
-				}
-#endif
 				if (mw.ReturnType != baseMethod.ReturnType)
 				{
 					if (mw.ReturnType.IsUnloadable || baseMethod.ReturnType.IsUnloadable)
@@ -1287,8 +1456,14 @@ namespace IKVM.Internal
 					{
 #if STATIC_COMPILER
 						StaticCompiler.LinkageError("Method \"{2}.{3}{4}\" has a return type \"{0}\" and tries to override method \"{5}.{3}{4}\" that has a return type \"{1}\"", mw.ReturnType, baseMethod.ReturnType, mw.DeclaringType.Name, mw.Name, mw.Signature, baseMethod.DeclaringType.Name);
+#else
+						// when we're finishing types to save a debug image (in dynamic mode) we don't care about loader constraints anymore
+						// (and we can't throw a LinkageError, because that would prevent the debug image from being saved)
+						if (!JVM.FinishingForDebugSave)
+						{
+							throw new LinkageError("Loader constraints violated");
+						}
 #endif
-						throw new LinkageError("Loader constraints violated");
 					}
 				}
 				TypeWrapper[] here = mw.GetParameters();
@@ -1309,8 +1484,14 @@ namespace IKVM.Internal
 						{
 #if STATIC_COMPILER
 							StaticCompiler.LinkageError("Method \"{2}.{3}{4}\" has an argument type \"{0}\" and tries to override method \"{5}.{3}{4}\" that has an argument type \"{1}\"", here[i], there[i], mw.DeclaringType.Name, mw.Name, mw.Signature, baseMethod.DeclaringType.Name);
+#else
+							// when we're finishing types to save a debug image (in dynamic mode) we don't care about loader constraints anymore
+							// (and we can't throw a LinkageError, because that would prevent the debug image from being saved)
+							if (!JVM.FinishingForDebugSave)
+							{
+								throw new LinkageError("Loader constraints violated");
+							}
 #endif
-							throw new LinkageError("Loader constraints violated");
 						}
 					}
 				}
@@ -1337,12 +1518,30 @@ namespace IKVM.Internal
 				}
 				int fieldIndex = GetFieldIndex(fw);
 #if STATIC_COMPILER
+				if (wrapper.GetClassLoader().RemoveUnusedFields
+					&& fw.IsPrivate
+					&& fw.IsStatic
+					&& fw.IsFinal
+					&& !fw.IsSerialVersionUID
+					&& classFile.Fields[fieldIndex].Annotations == null
+					&& !classFile.IsReferenced(classFile.Fields[fieldIndex]))
+				{
+					// unused, so we skip it
+					Tracer.Info(Tracer.Compiler, "Unused field {0}::{1}", wrapper.Name, fw.Name);
+					return null;
+				}
 				// for compatibility with broken Java code that assumes that reflection returns the fields in class declaration
 				// order, we emit the fields in class declaration order in the .NET metadata (and then when we retrieve them
 				// using .NET reflection, we sort on metadata token.)
-				for (int i = 0; i < fieldIndex; i++)
+				if (fieldIndex > 0)
 				{
-					fields[i].Link();
+					if (!fields[fieldIndex - 1].IsLinked)
+					{
+						for (int i = 0; i < fieldIndex; i++)
+						{
+							fields[i].Link();
+						}
+					}
 				}
 				if (fieldIndex >= classFile.Fields.Length)
 				{
@@ -1377,8 +1576,12 @@ namespace IKVM.Internal
 #endif // STATIC_COMPILER
 				FieldBuilder field;
 				ClassFile.Field fld = classFile.Fields[fieldIndex];
-				string realFieldName = fld.Name;
 				FieldAttributes attribs = 0;
+				string realFieldName = UnicodeUtil.EscapeInvalidSurrogates(fld.Name);
+				if (!ReferenceEquals(realFieldName, fld.Name))
+				{
+					attribs |= FieldAttributes.SpecialName;
+				}
 				MethodAttributes methodAttribs = MethodAttributes.HideBySig;
 #if STATIC_COMPILER
 				bool setModifiers = fld.IsInternal || (fld.Modifiers & (Modifiers.Synthetic | Modifiers.Enum)) != 0;
@@ -1415,7 +1618,7 @@ namespace IKVM.Internal
 				{
 					Profiler.Count("Static Final Constant");
 					attribs |= FieldAttributes.Literal;
-					field = DefineField(fld.Name, fw.FieldTypeWrapper, attribs, false);
+					field = DefineField(realFieldName, fw.FieldTypeWrapper, attribs, false);
 					field.SetConstant(fld.ConstantValue);
 				}
 				else
@@ -1430,7 +1633,7 @@ namespace IKVM.Internal
 						// see https://sourceforge.net/tracker/?func=detail&atid=525264&aid=3056721&group_id=69637
 						// additional note: now that we maintain the ordering of the fields, we need to recognize
 						// these fields so that we know where to insert the corresponding accessor property FieldWrapper.
-						realFieldName = NamePrefix.Type2AccessStubBackingField + fld.Name;
+						realFieldName = NamePrefix.Type2AccessStubBackingField + realFieldName;
 					}
 					else if (fld.IsFinal)
 					{
@@ -1465,13 +1668,17 @@ namespace IKVM.Internal
 					{
 						AttributeHelper.SetModifiers(field, fld.Modifiers, fld.IsInternal);
 					}
-					if (fld.DeprecatedAttribute)
+					if (fld.DeprecatedAttribute && !Annotation.HasObsoleteAttribute(fld.Annotations))
 					{
 						AttributeHelper.SetDeprecatedAttribute(field);
 					}
 					if (fld.GenericSignature != null)
 					{
 						AttributeHelper.SetSignatureAttribute(field, fld.GenericSignature);
+					}
+					if (fld.RuntimeVisibleTypeAnnotations != null)
+					{
+						AttributeHelper.SetRuntimeVisibleTypeAnnotationsAttribute(field, fld.RuntimeVisibleTypeAnnotations);
 					}
 				}
 #endif // STATIC_COMPILER
@@ -1494,9 +1701,11 @@ namespace IKVM.Internal
 
 			internal override DynamicImpl Finish()
 			{
-				if (wrapper.BaseTypeWrapper != null)
+				TypeWrapper baseTypeWrapper = wrapper.BaseTypeWrapper;
+				if (baseTypeWrapper != null)
 				{
-					wrapper.BaseTypeWrapper.Finish();
+					baseTypeWrapper.Finish();
+					baseTypeWrapper.LinkAll();
 				}
 				// NOTE there is a bug in the CLR (.NET 1.0 & 1.1 [1.2 is not yet available]) that
 				// causes the AppDomain.TypeResolve event to receive the incorrect type name for nested types.
@@ -1508,21 +1717,34 @@ namespace IKVM.Internal
 				// required in finished form, are finished explicitly here. It isn't clear what other types are
 				// required to be finished. I instrumented a static compilation of classpath.dll and this
 				// turned up no other cases of the TypeResolve event firing.
-				for (int i = 0; i < wrapper.Interfaces.Length; i++)
+				foreach (TypeWrapper iface in wrapper.interfaces)
 				{
-					wrapper.Interfaces[i].Finish();
+					iface.Finish();
+					iface.LinkAll();
 				}
 				// make sure all classes are loaded, before we start finishing the type. During finishing, we
 				// may not run any Java code, because that might result in a request to finish the type that we
 				// are in the process of finishing, and this would be a problem.
-				classFile.Link(wrapper);
-				for (int i = 0; i < fields.Length; i++)
+				// Prevent infinity recursion for broken class loaders by keeping a recursion count and falling
+				// back to late binding if we recurse more than twice.
+				LoadMode mode = System.Threading.Interlocked.Increment(ref recursionCount) > 2 || (JVM.DisableEagerClassLoading && wrapper.Name != "sun.reflect.misc.Trampoline")
+					? LoadMode.ReturnUnloadable
+					: LoadMode.Link;
+				try
 				{
-					fields[i].Link();
+					classFile.Link(wrapper, mode);
+					for (int i = 0; i < fields.Length; i++)
+					{
+						fields[i].Link(mode);
+					}
+					for (int i = 0; i < methods.Length; i++)
+					{
+						methods[i].Link(mode);
+					}
 				}
-				for (int i = 0; i < methods.Length; i++)
+				finally
 				{
-					methods[i].Link();
+					System.Threading.Interlocked.Decrement(ref recursionCount);
 				}
 				// this is the correct lock, FinishCore doesn't call any user code and mutates global state,
 				// so it needs to be protected by a lock.
@@ -1603,7 +1825,8 @@ namespace IKVM.Internal
 #if STATIC_COMPILER
 					if (annotationBuilder != null)
 					{
-						CustomAttributeBuilder cab = new CustomAttributeBuilder(JVM.LoadType(typeof(AnnotationAttributeAttribute)).GetConstructor(new Type[] { Types.String }), new object[] { annotationBuilder.AttributeTypeName });
+						CustomAttributeBuilder cab = new CustomAttributeBuilder(JVM.LoadType(typeof(AnnotationAttributeAttribute)).GetConstructor(new Type[] { Types.String }),
+							new object[] { UnicodeUtil.EscapeInvalidSurrogates(annotationBuilder.AttributeTypeName) });
 						typeBuilder.SetCustomAttribute(cab);
 					}
 					if (!wrapper.IsInterface && wrapper.IsMapUnsafeException)
@@ -1615,7 +1838,7 @@ namespace IKVM.Internal
 					}
 #endif
 
-					FinishContext context = new FinishContext(classFile, wrapper, typeBuilder);
+					FinishContext context = new FinishContext(host, classFile, wrapper, typeBuilder);
 					Type type = context.FinishImpl();
 #if STATIC_COMPILER
 					if (annotationBuilder != null)
@@ -1625,6 +1848,10 @@ namespace IKVM.Internal
 					if (enumBuilder != null)
 					{
 						enumBuilder.CreateType();
+					}
+					if (privateInterfaceMethods != null)
+					{
+						privateInterfaceMethods.CreateType();
 					}
 #endif
 					MethodInfo finishedClinitMethod = clinitMethod;
@@ -1636,7 +1863,7 @@ namespace IKVM.Internal
 						finishedClinitMethod = type.GetMethod("__<clinit>", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
 					}
 #endif
-					finishedType = new FinishedTypeImpl(type, innerClassesTypeWrappers, declaringTypeWrapper, wrapper.ReflectiveModifiers, Metadata.Create(classFile), finishedClinitMethod, finalizeMethod);
+					finishedType = new FinishedTypeImpl(type, innerClassesTypeWrappers, declaringTypeWrapper, wrapper.ReflectiveModifiers, Metadata.Create(classFile), finishedClinitMethod, finalizeMethod, host);
 					return finishedType;
 				}
 #if !STATIC_COMPILER
@@ -1707,7 +1934,7 @@ namespace IKVM.Internal
 				private TypeBuilder outer;
 				private TypeBuilder annotationTypeBuilder;
 				private TypeBuilder attributeTypeBuilder;
-				private ConstructorBuilder defineConstructor;
+				private MethodBuilder defineConstructor;
 
 				internal AnnotationBuilder(JavaTypeImpl o, TypeBuilder outer)
 				{
@@ -1747,14 +1974,14 @@ namespace IKVM.Internal
 
 					// make sure we don't clash with another class name
 					CompilerClassLoader ccl = o.wrapper.classLoader;
-					string name = o.classFile.Name;
+					string name = UnicodeUtil.EscapeInvalidSurrogates(o.classFile.Name);
 					while (!ccl.ReserveName(name + "Attribute"))
 					{
 						name += "_";
 					}
 
 					TypeAttributes typeAttributes = TypeAttributes.Class | TypeAttributes.Sealed;
-					if (o.outerClassWrapper != null)
+					if (o.enclosingClassWrapper != null)
 					{
 						if (o.wrapper.IsPublic)
 						{
@@ -1764,7 +1991,7 @@ namespace IKVM.Internal
 						{
 							typeAttributes |= TypeAttributes.NestedAssembly;
 						}
-						attributeTypeBuilder = outer.DefineNestedType(o.GetInnerClassName(o.outerClassWrapper.Name, name + "Attribute"), typeAttributes, annotationAttributeBaseType.TypeAsBaseType);
+						attributeTypeBuilder = outer.DefineNestedType(o.AllocNestedTypeName(o.enclosingClassWrapper.Name, name + "Attribute"), typeAttributes, annotationAttributeBaseType.TypeAsBaseType);
 					}
 					else
 					{
@@ -1852,7 +2079,7 @@ namespace IKVM.Internal
 							{
 								// apply any .NET custom attributes that are on the annotation to the custom attribute we synthesize
 								// (for example, to allow AttributeUsageAttribute to be overridden)
-								Annotation annotation = Annotation.Load(o.wrapper.GetClassLoader(), def);
+								Annotation annotation = Annotation.Load(o.wrapper, def);
 								if (annotation != null && annotation.IsCustomAttribute)
 								{
 									annotation.Apply(o.wrapper.GetClassLoader(), attributeTypeBuilder, def);
@@ -1869,7 +2096,7 @@ namespace IKVM.Internal
 						}
 					}
 
-					defineConstructor = attributeTypeBuilder.DefineConstructor(MethodAttributes.Public, CallingConventions.Standard, new Type[] { JVM.Import(typeof(object[])) });
+					defineConstructor = ReflectUtil.DefineConstructor(attributeTypeBuilder, MethodAttributes.Public, new Type[] { JVM.Import(typeof(object[])) });
 					AttributeHelper.SetEditorBrowsableNever(defineConstructor);
 				}
 
@@ -1893,9 +2120,13 @@ namespace IKVM.Internal
 						{
 							argType = Types.Type;
 						}
-						else if (tw.EnumType != null)
+						else if (tw.EnumType != null)	// is it a Java enum?
 						{
 							argType = tw.EnumType;
+						}
+						else if (IsDotNetEnum(tw))
+						{
+							argType = tw.DeclaringTypeWrapper.TypeAsSignatureType;
 						}
 						else
 						{
@@ -1907,6 +2138,11 @@ namespace IKVM.Internal
 						}
 						return argType;
 					}
+				}
+
+				private static bool IsDotNetEnum(TypeWrapper tw)
+				{
+					return tw.IsFakeNestedType && (tw.Modifiers & Modifiers.Enum) != 0;
 				}
 
 				internal string AttributeTypeName
@@ -1931,9 +2167,13 @@ namespace IKVM.Internal
 					{
 						ilgen.Emit(OpCodes.Box, tw.TypeAsSignatureType);
 					}
-					else if (tw.EnumType != null)
+					else if (tw.EnumType != null)	// is it a Java enum?
 					{
 						ilgen.Emit(OpCodes.Box, tw.EnumType);
+					}
+					else if (IsDotNetEnum(tw))
+					{
+						ilgen.Emit(OpCodes.Box, tw.DeclaringTypeWrapper.TypeAsSignatureType);
 					}
 					MethodWrapper setValueMethod = annotationAttributeBaseType.GetMethodWrapper("setValue", "(Ljava.lang.String;Ljava.lang.Object;)V", false);
 					setValueMethod.Link();
@@ -1974,7 +2214,7 @@ namespace IKVM.Internal
 						}
 					}
 
-					ConstructorBuilder defaultConstructor = attributeTypeBuilder.DefineConstructor(unsupported || requiredArgCount > 0 ? MethodAttributes.Private : MethodAttributes.Public, CallingConventions.Standard, Type.EmptyTypes);
+					MethodBuilder defaultConstructor = ReflectUtil.DefineConstructor(attributeTypeBuilder, unsupported || requiredArgCount > 0 ? MethodAttributes.Private : MethodAttributes.Public, Type.EmptyTypes);
 					CodeEmitter ilgen;
 
 					if (!unsupported)
@@ -1992,7 +2232,7 @@ namespace IKVM.Internal
 									}
 								}
 							}
-							ConstructorBuilder reqArgConstructor = attributeTypeBuilder.DefineConstructor(MethodAttributes.Public, CallingConventions.Standard, args);
+							MethodBuilder reqArgConstructor = ReflectUtil.DefineConstructor(attributeTypeBuilder, MethodAttributes.Public, args);
 							AttributeHelper.HideFromJava(reqArgConstructor);
 							ilgen = CodeEmitter.Create(reqArgConstructor);
 							ilgen.Emit(OpCodes.Ldarg_0);
@@ -2019,7 +2259,7 @@ namespace IKVM.Internal
 							Type argType = TypeWrapperToAnnotationParameterType(o.methods[valueArg].ReturnType);
 							if (argType != null)
 							{
-								ConstructorBuilder cb = attributeTypeBuilder.DefineConstructor(MethodAttributes.Public, CallingConventions.Standard, new Type[] { argType });
+								MethodBuilder cb = ReflectUtil.DefineConstructor(attributeTypeBuilder, MethodAttributes.Public, new Type[] { argType });
 								AttributeHelper.HideFromJava(cb);
 								cb.DefineParameter(1, ParameterAttributes.None, "value");
 								ilgen = CodeEmitter.Create(cb);
@@ -2059,8 +2299,8 @@ namespace IKVM.Internal
 					MethodWrapper getDoubleValueMethod = annotationAttributeBaseType.GetMethodWrapper("getDoubleValue", "(Ljava.lang.String;)D", false);
 					for (int i = 0; i < o.methods.Length; i++)
 					{
-						// skip <clinit>
-						if (!o.methods[i].IsStatic)
+						// skip <clinit> and non-virtual interface methods introduced in Java 8
+						if (o.methods[i].IsVirtual)
 						{
 							MethodBuilder mb = o.methods[i].GetDefineMethodHelper().DefineMethod(o.wrapper, attributeTypeBuilder, o.methods[i].Name, MethodAttributes.Private | MethodAttributes.Virtual | MethodAttributes.Final | MethodAttributes.NewSlot);
 							attributeTypeBuilder.DefineMethodOverride(mb, (MethodInfo)o.methods[i].GetMethod());
@@ -2109,7 +2349,7 @@ namespace IKVM.Internal
 							else
 							{
 								getValueMethod.EmitCall(ilgen);
-								o.methods[i].ReturnType.EmitCheckcast(null, ilgen);
+								o.methods[i].ReturnType.EmitCheckcast(ilgen);
 							}
 							ilgen.Emit(OpCodes.Ret);
 							ilgen.DoEmit();
@@ -2144,74 +2384,43 @@ namespace IKVM.Internal
 					attributeTypeBuilder.CreateType();
 				}
 
-				internal override void Apply(ClassLoaderWrapper loader, TypeBuilder tb, object annotation)
+				private CustomAttributeBuilder MakeCustomAttributeBuilder(ClassLoaderWrapper loader, object annotation)
 				{
 					Link();
-					if (annotationTypeBuilder != null)
-					{
-						annotation = QualifyClassNames(loader, annotation);
-						tb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor, new object[] { annotation }));
-					}
+					ConstructorInfo ctor = defineConstructor != null
+						? defineConstructor.__AsConstructorInfo()
+						: StaticCompiler.GetRuntimeType("IKVM.Attributes.DynamicAnnotationAttribute").GetConstructor(new Type[] { Types.Object.MakeArrayType() });
+					return new CustomAttributeBuilder(ctor, new object[] { AnnotationDefaultAttribute.Escape(QualifyClassNames(loader, annotation)) });
+				}
+
+				internal override void Apply(ClassLoaderWrapper loader, TypeBuilder tb, object annotation)
+				{
+					tb.SetCustomAttribute(MakeCustomAttributeBuilder(loader, annotation));
 				}
 
 				internal override void Apply(ClassLoaderWrapper loader, MethodBuilder mb, object annotation)
 				{
-					Link();
-					if (annotationTypeBuilder != null)
-					{
-						annotation = QualifyClassNames(loader, annotation);
-						mb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor, new object[] { annotation }));
-					}
-				}
-
-				internal override void Apply(ClassLoaderWrapper loader, ConstructorBuilder cb, object annotation)
-				{
-					Link();
-					if (annotationTypeBuilder != null)
-					{
-						annotation = QualifyClassNames(loader, annotation);
-						cb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor, new object[] { annotation }));
-					}
+					mb.SetCustomAttribute(MakeCustomAttributeBuilder(loader, annotation));
 				}
 
 				internal override void Apply(ClassLoaderWrapper loader, FieldBuilder fb, object annotation)
 				{
-					Link();
-					if (annotationTypeBuilder != null)
-					{
-						annotation = QualifyClassNames(loader, annotation);
-						fb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor, new object[] { annotation }));
-					}
+					fb.SetCustomAttribute(MakeCustomAttributeBuilder(loader, annotation));
 				}
 
 				internal override void Apply(ClassLoaderWrapper loader, ParameterBuilder pb, object annotation)
 				{
-					Link();
-					if (annotationTypeBuilder != null)
-					{
-						annotation = QualifyClassNames(loader, annotation);
-						pb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor, new object[] { annotation }));
-					}
+					pb.SetCustomAttribute(MakeCustomAttributeBuilder(loader, annotation));
 				}
 
 				internal override void Apply(ClassLoaderWrapper loader, AssemblyBuilder ab, object annotation)
 				{
-					Link();
-					if (annotationTypeBuilder != null)
-					{
-						annotation = QualifyClassNames(loader, annotation);
-						ab.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor, new object[] { annotation }));
-					}
+					ab.SetCustomAttribute(MakeCustomAttributeBuilder(loader, annotation));
 				}
 
 				internal override void Apply(ClassLoaderWrapper loader, PropertyBuilder pb, object annotation)
 				{
-					Link();
-					if (annotationTypeBuilder != null)
-					{
-						annotation = QualifyClassNames(loader, annotation);
-						pb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor, new object[] { annotation }));
-					}
+					pb.SetCustomAttribute(MakeCustomAttributeBuilder(loader, annotation));
 				}
 
 				internal override bool IsCustomAttribute
@@ -2291,6 +2500,8 @@ namespace IKVM.Internal
 				// NOTE this implements the (completely broken) OpenJDK 7 b147 HotSpot behavior,
 				// not the algorithm specified in section 5.4.5 of the JavaSE7 JVM spec
 				// see http://weblog.ikvm.net/PermaLink.aspx?guid=bde44d8b-7ba9-4e0e-b3a6-b735627118ff and subsequent posts
+				// UPDATE as of JDK 7u65 and JDK 8u11, the algorithm changed again to handle package private methods differently
+				// this code has not been updated to reflect these changes (we're still at JDK 8 GA level)
 				explicitOverride = false;
 				MethodWrapper topPublicOrProtectedMethod = null;
 				TypeWrapper tw = wrapper.BaseTypeWrapper;
@@ -2327,7 +2538,7 @@ namespace IKVM.Internal
 					{
 						// skip
 					}
-					else if (baseMethod.IsFinal && (baseMethod.IsPublic || baseMethod.IsProtected || baseMethod.DeclaringType.IsPackageAccessibleFrom(wrapper)))
+					else if (baseMethod.IsFinal && (baseMethod.IsPublic || baseMethod.IsProtected || IsAccessibleInternal(baseMethod) || baseMethod.DeclaringType.IsPackageAccessibleFrom(wrapper)))
 					{
 						throw new VerifyError("final method " + baseMethod.Name + baseMethod.Signature + " in " + baseMethod.DeclaringType.Name + " is overridden in " + wrapper.Name);
 					}
@@ -2335,12 +2546,12 @@ namespace IKVM.Internal
 					{
 						// skip
 					}
-					else if (topPublicOrProtectedMethod == null && !baseMethod.IsPublic && !baseMethod.IsProtected && !baseMethod.DeclaringType.IsPackageAccessibleFrom(wrapper))
+					else if (topPublicOrProtectedMethod == null && !baseMethod.IsPublic && !baseMethod.IsProtected && !IsAccessibleInternal(baseMethod) && !baseMethod.DeclaringType.IsPackageAccessibleFrom(wrapper))
 					{
 						// this is a package private method that we're not overriding (unless its vtable stream interleaves ours, which is a case we handle below)
 						explicitOverride = true;
 					}
-					else if (topPublicOrProtectedMethod != null && baseMethod.IsFinal && !baseMethod.IsPublic && !baseMethod.IsProtected && !baseMethod.DeclaringType.IsPackageAccessibleFrom(wrapper))
+					else if (topPublicOrProtectedMethod != null && baseMethod.IsFinal && !baseMethod.IsPublic && !baseMethod.IsProtected && !IsAccessibleInternal(baseMethod) && !baseMethod.DeclaringType.IsPackageAccessibleFrom(wrapper))
 					{
 						// this is package private final method that we would override had it not been final, but which is ignored by HotSpot (instead of throwing a VerifyError)
 						explicitOverride = true;
@@ -2451,6 +2662,11 @@ namespace IKVM.Internal
 					tw = baseMethod.DeclaringType.BaseTypeWrapper;
 				}
 				return null;
+			}
+
+			private bool IsAccessibleInternal(MethodWrapper mw)
+			{
+				return mw.IsInternal && mw.DeclaringType.InternalsVisibleTo(wrapper);
 			}
 
 			private static MethodBase LinkAndGetMethod(MethodWrapper mw)
@@ -2694,6 +2910,7 @@ namespace IKVM.Internal
 
 			internal override MethodBase LinkMethod(MethodWrapper mw)
 			{
+				Debug.Assert(mw != null);
 				if (mw is DelegateConstructorMethodWrapper)
 				{
 					((DelegateConstructorMethodWrapper)mw).DoLink(typeBuilder);
@@ -2703,7 +2920,13 @@ namespace IKVM.Internal
 				{
 					return ((DelegateInvokeStubMethodWrapper)mw).DoLink(typeBuilder);
 				}
-				Debug.Assert(mw != null);
+				if (mw.IsClassInitializer && mw.IsNoOp && (!wrapper.IsSerializable || HasSerialVersionUID))
+				{
+					// we don't need to emit the <clinit>, because it is empty and we're not serializable or have an explicit serialVersionUID
+					// (because we cannot affect serialVersionUID computation (which is the only way the presence of a <clinit> can surface)
+					// we cannot do this optimization if the class is serializable but doesn't have a serialVersionUID)
+					return null;
+				}
 				int index = GetMethodIndex(mw);
 				if (baseMethods[index] != null)
 				{
@@ -2722,19 +2945,51 @@ namespace IKVM.Internal
 					{
 						if (methods[index].IsMirandaMethod)
 						{
-							// We're a Miranda method
+							// We're a Miranda method or we're an inherited default interface method
 							Debug.Assert(baseMethods[index].Length == 1 && baseMethods[index][0].DeclaringType.IsInterface);
-							MethodBuilder mb = methods[index].GetDefineMethodHelper().DefineMethod(wrapper, typeBuilder, methods[index].Name, MethodAttributes.HideBySig | MethodAttributes.NewSlot | MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Abstract | MethodAttributes.CheckAccessOnOverride);
+							MirandaMethodWrapper mmw = (MirandaMethodWrapper)methods[index];
+							MethodAttributes attr = MethodAttributes.HideBySig | MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.CheckAccessOnOverride;
+							MethodWrapper baseMiranda = null;
+							bool baseMirandaOverrideStub = false;
+							if (wrapper.BaseTypeWrapper == null || (baseMiranda = wrapper.BaseTypeWrapper.GetMethodWrapper(mw.Name, mw.Signature, true)) == null || !baseMiranda.IsMirandaMethod)
+							{
+								// we're not overriding a miranda method in a base class, so can we set the newslot flag
+								attr |= MethodAttributes.NewSlot;
+							}
+							else
+							{
+								baseMiranda.Link();
+								if (CheckRequireOverrideStub(methods[index], baseMiranda))
+								{
+									baseMirandaOverrideStub = true;
+									attr |= MethodAttributes.NewSlot;
+								}
+							}
+							if (wrapper.IsInterface || (wrapper.IsAbstract && mmw.BaseMethod.IsAbstract && mmw.Error == null))
+							{
+								attr |= MethodAttributes.Abstract;
+							}
+							MethodBuilder mb = methods[index].GetDefineMethodHelper().DefineMethod(wrapper, typeBuilder, methods[index].Name, attr);
 							AttributeHelper.HideFromReflection(mb);
-							if (CheckRequireOverrideStub(methods[index], baseMethods[index][0]))
+							if (baseMirandaOverrideStub)
 							{
-								wrapper.GenerateOverrideStub(typeBuilder, baseMethods[index][0], mb, methods[index]);
+								wrapper.GenerateOverrideStub(typeBuilder, baseMiranda, mb, methods[index]);
 							}
-							// if we changed the name or if the interface method name is remapped, we need to add an explicit methodoverride.
-							else if (!baseMethods[index][0].IsDynamicOnly && methods[index].Name != baseMethods[index][0].RealName)
+							if ((!wrapper.IsAbstract && mmw.BaseMethod.IsAbstract) || (!wrapper.IsInterface && mmw.Error != null))
 							{
-								typeBuilder.DefineMethodOverride(mb, (MethodInfo)baseMethods[index][0].GetMethod());
+								string message = mmw.Error ?? (wrapper.Name + "." + methods[index].Name + methods[index].Signature);
+								CodeEmitter ilgen = CodeEmitter.Create(mb);
+								ilgen.EmitThrow(mmw.IsConflictError ? "java.lang.IncompatibleClassChangeError" : "java.lang.AbstractMethodError", message);
+								ilgen.DoEmit();
+								wrapper.EmitLevel4Warning(mmw.IsConflictError ? HardError.IncompatibleClassChangeError : HardError.AbstractMethodError, message);
 							}
+#if STATIC_COMPILER
+							if (wrapper.IsInterface && !mmw.IsAbstract)
+							{
+								// even though we're not visible to reflection., we need to record the fact that we have a default implementation
+								AttributeHelper.SetModifiers(mb, mmw.Modifiers, false);
+							}
+#endif
 							return mb;
 						}
 						else
@@ -2743,7 +2998,7 @@ namespace IKVM.Internal
 						}
 					}
 					ClassFile.Method m = classFile.Methods[index];
-					MethodBase method;
+					MethodBuilder method;
 					bool setModifiers = false;
 					if (methods[index].HasCallerID && (m.Modifiers & Modifiers.VarArgs) != 0)
 					{
@@ -2762,7 +3017,7 @@ namespace IKVM.Internal
 					}
 					else if (m.IsClassInitializer)
 					{
-						method = ReflectUtil.DefineTypeInitializer(typeBuilder);
+						method = ReflectUtil.DefineTypeInitializer(typeBuilder, wrapper.classLoader);
 					}
 					else
 					{
@@ -2774,37 +3029,44 @@ namespace IKVM.Internal
 					AttributeHelper.SetThrowsAttribute(method, exceptions);
 					if (setModifiers || m.IsInternal || (m.Modifiers & (Modifiers.Synthetic | Modifiers.Bridge)) != 0)
 					{
-						if (method is ConstructorBuilder)
-						{
-							AttributeHelper.SetModifiers((ConstructorBuilder)method, m.Modifiers, m.IsInternal);
-						}
-						else
-						{
-							AttributeHelper.SetModifiers((MethodBuilder)method, m.Modifiers, m.IsInternal);
-						}
+						AttributeHelper.SetModifiers(method, m.Modifiers, m.IsInternal);
 					}
 					if ((m.Modifiers & (Modifiers.Synthetic | Modifiers.Bridge)) != 0
 						&& (m.IsPublic || m.IsProtected)
 						&& wrapper.IsPublic
 						&& !IsAccessBridge(classFile, m))
 					{
-						if (method is ConstructorBuilder)
-						{
-							AttributeHelper.SetEditorBrowsableNever((ConstructorBuilder)method);
-						}
-						else
-						{
-							AttributeHelper.SetEditorBrowsableNever((MethodBuilder)method);
-						}
+						AttributeHelper.SetEditorBrowsableNever(method);
 						// TODO on WHIDBEY apply CompilerGeneratedAttribute
 					}
-					if (m.DeprecatedAttribute)
+					if (m.DeprecatedAttribute && !Annotation.HasObsoleteAttribute(m.Annotations))
 					{
 						AttributeHelper.SetDeprecatedAttribute(method);
 					}
 					if (m.GenericSignature != null)
 					{
 						AttributeHelper.SetSignatureAttribute(method, m.GenericSignature);
+					}
+					if (wrapper.GetClassLoader().NoParameterReflection)
+					{
+						// ignore MethodParameters (except to extract parameter names)
+					}
+					else if (m.MalformedMethodParameters)
+					{
+						AttributeHelper.SetMethodParametersAttribute(method, null);
+					}
+					else if (m.MethodParameters != null)
+					{
+						Modifiers[] modifiers = new Modifiers[m.MethodParameters.Length];
+						for (int i = 0; i < modifiers.Length; i++)
+						{
+							modifiers[i] = (Modifiers)m.MethodParameters[i].flags;
+						}
+						AttributeHelper.SetMethodParametersAttribute(method, modifiers);
+					}
+					if (m.RuntimeVisibleTypeAnnotations != null)
+					{
+						AttributeHelper.SetRuntimeVisibleTypeAnnotationsAttribute(method, m.RuntimeVisibleTypeAnnotations);
 					}
 #else // STATIC_COMPILER
 					if (setModifiers)
@@ -2820,14 +3082,29 @@ namespace IKVM.Internal
 				}
 			}
 
-			private MethodBase GenerateConstructor(MethodWrapper mw)
+			private bool HasSerialVersionUID
+			{
+				get
+				{
+					foreach (FieldWrapper field in fields)
+					{
+						if (field.IsSerialVersionUID)
+						{
+							return true;
+						}
+					}
+					return false;
+				}
+			}
+
+			private MethodBuilder GenerateConstructor(MethodWrapper mw)
 			{
 				MethodBuilder cb = mw.GetDefineMethodHelper().DefineConstructor(wrapper, typeBuilder, GetMethodAccess(mw) | MethodAttributes.HideBySig);
 				cb.SetImplementationFlags(MethodImplAttributes.NoInlining);
 				return cb;
 			}
 
-			private MethodBase GenerateMethod(int index, ClassFile.Method m, ref bool setModifiers)
+			private MethodBuilder GenerateMethod(int index, ClassFile.Method m, ref bool setModifiers)
 			{
 				MethodAttributes attribs = MethodAttributes.HideBySig;
 				if (m.IsNative)
@@ -2853,7 +3130,7 @@ namespace IKVM.Internal
 				{
 					attribs |= GetMethodAccess(methods[index]);
 				}
-				if (m.IsAbstract)
+				if (m.IsAbstract || (!m.IsStatic && m.IsPublic && classFile.IsInterface))
 				{
 					// only if the classfile is abstract, we make the CLR method abstract, otherwise,
 					// we have to generate a method that throws an AbstractMethodError (because the JVM
@@ -2866,6 +3143,10 @@ namespace IKVM.Internal
 						}
 						else
 						{
+							if (!m.IsAbstract)
+							{
+								setModifiers = true;
+							}
 							attribs |= MethodAttributes.Abstract;
 						}
 					}
@@ -2876,7 +3157,7 @@ namespace IKVM.Internal
 				}
 				if (m.IsFinal)
 				{
-					if (!m.IsStatic && !m.IsPrivate)
+					if (m.IsVirtual)
 					{
 						attribs |= MethodAttributes.Final;
 					}
@@ -2897,7 +3178,12 @@ namespace IKVM.Internal
 				{
 					attribs |= MethodAttributes.Virtual | MethodAttributes.CheckAccessOnOverride;
 				}
-				string name = m.Name;
+				string name = UnicodeUtil.EscapeInvalidSurrogates(m.Name);
+				if (!ReferenceEquals(name, m.Name))
+				{
+					// mark as specialname to remind us to unescape the name
+					attribs |= MethodAttributes.SpecialName;
+				}
 #if STATIC_COMPILER
 				if ((m.Modifiers & Modifiers.Bridge) != 0 && (m.IsPublic || m.IsProtected) && wrapper.IsPublic)
 				{
@@ -2945,7 +3231,7 @@ namespace IKVM.Internal
 				}
 				MethodBuilder mb = null;
 #if STATIC_COMPILER
-				mb = wrapper.DefineGhostMethod(name, attribs, methods[index]);
+				mb = wrapper.DefineGhostMethod(typeBuilder, name, attribs, methods[index]);
 #endif
 				if (mb == null)
 				{
@@ -3005,7 +3291,44 @@ namespace IKVM.Internal
 					{
 						attribs |= MethodAttributes.NewSlot;
 					}
-					mb = methods[index].GetDefineMethodHelper().DefineMethod(wrapper, typeBuilder, name, attribs);
+					if (classFile.IsInterface && !m.IsPublic && !wrapper.IsGhost)
+					{
+						TypeBuilder tb = typeBuilder;
+#if STATIC_COMPILER
+						if (wrapper.IsPublic && wrapper.classLoader.WorkaroundInterfacePrivateMethods)
+						{
+							// FXBUG csc.exe doesn't like non-public methods in interfaces, so we put them in a nested type
+							if (privateInterfaceMethods == null)
+							{
+								privateInterfaceMethods = typeBuilder.DefineNestedType(NestedTypeName.PrivateInterfaceMethods,
+									TypeAttributes.NestedPrivate | TypeAttributes.Sealed | TypeAttributes.Abstract | TypeAttributes.BeforeFieldInit);
+							}
+							tb = privateInterfaceMethods;
+							attribs &= ~MethodAttributes.MemberAccessMask;
+							attribs |= MethodAttributes.Assembly;
+						}
+#endif
+						if (m.IsStatic)
+						{
+							mb = methods[index].GetDefineMethodHelper().DefineMethod(wrapper, tb, name, attribs);
+						}
+						else
+						{
+							// the CLR doesn't allow (non-virtual) instance methods in interfaces,
+							// so we need to turn it into a static method
+							mb = methods[index].GetDefineMethodHelper().DefineMethod(wrapper.GetClassLoader().GetTypeWrapperFactory(),
+								tb, NamePrefix.PrivateInterfaceInstanceMethod + name, attribs | MethodAttributes.Static | MethodAttributes.SpecialName,
+								typeBuilder, false);
+#if STATIC_COMPILER
+							AttributeHelper.SetNameSig(mb, m.Name, m.Signature);
+#endif
+						}
+						setModifiers = true;
+					}
+					else
+					{
+						mb = methods[index].GetDefineMethodHelper().DefineMethod(wrapper, typeBuilder, name, attribs);
+					}
 					if (baseMethods[index] != null && !needFinalize)
 					{
 						bool subsequent = false;
@@ -3072,7 +3395,8 @@ namespace IKVM.Internal
 #if STATIC_COMPILER
 					if (classFile.Methods[index].AnnotationDefault != null)
 					{
-						CustomAttributeBuilder cab = new CustomAttributeBuilder(StaticCompiler.GetRuntimeType("IKVM.Attributes.AnnotationDefaultAttribute").GetConstructor(new Type[] { Types.Object }), new object[] { classFile.Methods[index].AnnotationDefault });
+						CustomAttributeBuilder cab = new CustomAttributeBuilder(StaticCompiler.GetRuntimeType("IKVM.Attributes.AnnotationDefaultAttribute").GetConstructor(new Type[] { Types.Object }),
+							new object[] { AnnotationDefaultAttribute.Escape(classFile.Methods[index].AnnotationDefault) });
 						mb.SetCustomAttribute(cab);
 					}
 #endif // STATIC_COMPILER
@@ -3081,6 +3405,42 @@ namespace IKVM.Internal
 				if ((methods[index].Modifiers & (Modifiers.Synchronized | Modifiers.Static)) == Modifiers.Synchronized)
 				{
 					mb.SetImplementationFlags(mb.GetMethodImplementationFlags() | MethodImplAttributes.Synchronized);
+				}
+
+				if (classFile.Methods[index].IsForceInline)
+				{
+					const MethodImplAttributes AggressiveInlining = (MethodImplAttributes)256;
+					mb.SetImplementationFlags(mb.GetMethodImplementationFlags() | AggressiveInlining);
+				}
+
+				if (classFile.Methods[index].IsLambdaFormCompiled || classFile.Methods[index].IsLambdaFormHidden)
+				{
+					HideFromJavaFlags flags = HideFromJavaFlags.None;
+					if (classFile.Methods[index].IsLambdaFormCompiled)
+					{
+						flags |= HideFromJavaFlags.StackWalk;
+					}
+					if (classFile.Methods[index].IsLambdaFormHidden)
+					{
+						flags |= HideFromJavaFlags.StackTrace;
+					}
+					AttributeHelper.HideFromJava(mb, flags);
+				}
+
+				if (classFile.IsInterface && methods[index].IsVirtual && !methods[index].IsAbstract)
+				{
+					if (wrapper.IsGhost)
+					{
+						DefaultInterfaceMethodWrapper.SetImpl(methods[index], methods[index].GetDefineMethodHelper().DefineMethod(wrapper.GetClassLoader().GetTypeWrapperFactory(),
+							typeBuilder, NamePrefix.DefaultMethod + mb.Name, MethodAttributes.Public | MethodAttributes.SpecialName,
+							null, false));
+					}
+					else
+					{
+						DefaultInterfaceMethodWrapper.SetImpl(methods[index], methods[index].GetDefineMethodHelper().DefineMethod(wrapper.GetClassLoader().GetTypeWrapperFactory(),
+							typeBuilder, NamePrefix.DefaultMethod + mb.Name, MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.SpecialName,
+							typeBuilder, false));
+					}
 				}
 
 				return mb;
@@ -3182,6 +3542,12 @@ namespace IKVM.Internal
 				return null;
 			}
 
+			internal override MethodParametersEntry[] GetMethodParameters(int index)
+			{
+				Debug.Fail("Unreachable code");
+				return null;
+			}
+
 			internal override object[] GetFieldAnnotations(int index)
 			{
 				Debug.Fail("Unreachable code");
@@ -3192,17 +3558,53 @@ namespace IKVM.Internal
 			{
 				return finalizeMethod;
 			}
+
+			internal override object[] GetConstantPool()
+			{
+				Debug.Fail("Unreachable code");
+				return null;
+			}
+
+			internal override byte[] GetRawTypeAnnotations()
+			{
+				Debug.Fail("Unreachable code");
+				return null;
+			}
+
+			internal override byte[] GetMethodRawTypeAnnotations(int index)
+			{
+				Debug.Fail("Unreachable code");
+				return null;
+			}
+
+			internal override byte[] GetFieldRawTypeAnnotations(int index)
+			{
+				Debug.Fail("Unreachable code");
+				return null;
+			}
+
+			internal override TypeWrapper Host
+			{
+				get { return host; }
+			}
 		}
 
 		private sealed class Metadata
 		{
-			private string[][] genericMetaData;
-			private object[][] annotations;
+			private readonly string[][] genericMetaData;
+			private readonly object[][] annotations;
+			private readonly MethodParametersEntry[][] methodParameters;
+			private readonly byte[][][] runtimeVisibleTypeAnnotations;
+			private readonly object[] constantPool;
 
-			private Metadata(string[][] genericMetaData, object[][] annotations)
+			private Metadata(string[][] genericMetaData, object[][] annotations, MethodParametersEntry[][] methodParameters,
+				byte[][][] runtimeVisibleTypeAnnotations, object[] constantPool)
 			{
 				this.genericMetaData = genericMetaData;
 				this.annotations = annotations;
+				this.methodParameters = methodParameters;
+				this.runtimeVisibleTypeAnnotations = runtimeVisibleTypeAnnotations;
+				this.constantPool = constantPool;
 			}
 
 			internal static Metadata Create(ClassFile classFile)
@@ -3213,6 +3615,8 @@ namespace IKVM.Internal
 				}
 				string[][] genericMetaData = null;
 				object[][] annotations = null;
+				MethodParametersEntry[][] methodParameters = null;
+				byte[][][] runtimeVisibleTypeAnnotations = null;
 				for (int i = 0; i < classFile.Methods.Length; i++)
 				{
 					if (classFile.Methods[i].GenericSignature != null)
@@ -3263,6 +3667,26 @@ namespace IKVM.Internal
 						}
 						annotations[3][i] = classFile.Methods[i].AnnotationDefault;
 					}
+					if (classFile.Methods[i].MethodParameters != null)
+					{
+						if (methodParameters == null)
+						{
+							methodParameters = new MethodParametersEntry[classFile.Methods.Length][];
+						}
+						methodParameters[i] = classFile.Methods[i].MethodParameters;
+					}
+					if (classFile.Methods[i].RuntimeVisibleTypeAnnotations != null)
+					{
+						if (runtimeVisibleTypeAnnotations == null)
+						{
+							runtimeVisibleTypeAnnotations = new byte[3][][];
+						}
+						if (runtimeVisibleTypeAnnotations[1] == null)
+						{
+							runtimeVisibleTypeAnnotations[1] = new byte[classFile.Methods.Length][];
+						}
+						runtimeVisibleTypeAnnotations[1][i] = classFile.Methods[i].RuntimeVisibleTypeAnnotations;
+					}
 				}
 				for (int i = 0; i < classFile.Fields.Length; i++)
 				{
@@ -3290,6 +3714,18 @@ namespace IKVM.Internal
 						}
 						annotations[4][i] = classFile.Fields[i].Annotations;
 					}
+					if (classFile.Fields[i].RuntimeVisibleTypeAnnotations != null)
+					{
+						if (runtimeVisibleTypeAnnotations == null)
+						{
+							runtimeVisibleTypeAnnotations = new byte[3][][];
+						}
+						if (runtimeVisibleTypeAnnotations[2] == null)
+						{
+							runtimeVisibleTypeAnnotations[2] = new byte[classFile.Fields.Length][];
+						}
+						runtimeVisibleTypeAnnotations[2][i] = classFile.Fields[i].RuntimeVisibleTypeAnnotations;
+					}
 				}
 				if (classFile.EnclosingMethod != null)
 				{
@@ -3315,9 +3751,18 @@ namespace IKVM.Internal
 					}
 					annotations[0] = classFile.Annotations;
 				}
-				if (genericMetaData != null || annotations != null)
+				if (classFile.RuntimeVisibleTypeAnnotations != null)
 				{
-					return new Metadata(genericMetaData, annotations);
+					if (runtimeVisibleTypeAnnotations == null)
+					{
+						runtimeVisibleTypeAnnotations = new byte[3][][];
+					}
+					runtimeVisibleTypeAnnotations[0] = new byte[1][] { classFile.RuntimeVisibleTypeAnnotations };
+				}
+				if (genericMetaData != null || annotations != null || methodParameters != null || runtimeVisibleTypeAnnotations != null)
+				{
+					object[] constantPool = runtimeVisibleTypeAnnotations == null ? null : classFile.GetConstantPool();
+					return new Metadata(genericMetaData, annotations, methodParameters, runtimeVisibleTypeAnnotations, constantPool);
 				}
 				return null;
 			}
@@ -3385,6 +3830,15 @@ namespace IKVM.Internal
 				return null;
 			}
 
+			internal static MethodParametersEntry[] GetMethodParameters(Metadata m, int index)
+			{
+				if (m != null && m.methodParameters != null)
+				{
+					return m.methodParameters[index];
+				}
+				return null;
+			}
+
 			internal static object GetMethodDefaultValue(Metadata m, int index)
 			{
 				if (m != null && m.annotations != null && m.annotations[3] != null)
@@ -3403,19 +3857,52 @@ namespace IKVM.Internal
 				}
 				return null;
 			}
+
+			internal static object[] GetConstantPool(Metadata m)
+			{
+				return m.constantPool;
+			}
+
+			internal static byte[] GetRawTypeAnnotations(Metadata m)
+			{
+				if (m != null && m.runtimeVisibleTypeAnnotations != null && m.runtimeVisibleTypeAnnotations[0] != null)
+				{
+					return m.runtimeVisibleTypeAnnotations[0][0];
+				}
+				return null;
+			}
+
+			internal static byte[] GetMethodRawTypeAnnotations(Metadata m, int index)
+			{
+				if (m != null && m.runtimeVisibleTypeAnnotations != null && m.runtimeVisibleTypeAnnotations[1] != null)
+				{
+					return m.runtimeVisibleTypeAnnotations[1][index];
+				}
+				return null;
+			}
+
+			internal static byte[] GetFieldRawTypeAnnotations(Metadata m, int index)
+			{
+				if (m != null && m.runtimeVisibleTypeAnnotations != null && m.runtimeVisibleTypeAnnotations[2] != null)
+				{
+					return m.runtimeVisibleTypeAnnotations[2][index];
+				}
+				return null;
+			}
 		}
 
 		private sealed class FinishedTypeImpl : DynamicImpl
 		{
-			private Type type;
-			private TypeWrapper[] innerclasses;
-			private TypeWrapper declaringTypeWrapper;
-			private Modifiers reflectiveModifiers;
-			private MethodInfo clinitMethod;
-			private MethodInfo finalizeMethod;
-			private Metadata metadata;
+			private readonly Type type;
+			private readonly TypeWrapper[] innerclasses;
+			private readonly TypeWrapper declaringTypeWrapper;
+			private readonly Modifiers reflectiveModifiers;
+			private readonly MethodInfo clinitMethod;
+			private readonly MethodInfo finalizeMethod;
+			private readonly Metadata metadata;
+			private readonly TypeWrapper host;
 
-			internal FinishedTypeImpl(Type type, TypeWrapper[] innerclasses, TypeWrapper declaringTypeWrapper, Modifiers reflectiveModifiers, Metadata metadata, MethodInfo clinitMethod, MethodInfo finalizeMethod)
+			internal FinishedTypeImpl(Type type, TypeWrapper[] innerclasses, TypeWrapper declaringTypeWrapper, Modifiers reflectiveModifiers, Metadata metadata, MethodInfo clinitMethod, MethodInfo finalizeMethod, TypeWrapper host)
 			{
 				this.type = type;
 				this.innerclasses = innerclasses;
@@ -3424,6 +3911,7 @@ namespace IKVM.Internal
 				this.clinitMethod = clinitMethod;
 				this.finalizeMethod = finalizeMethod;
 				this.metadata = metadata;
+				this.host = host;
 			}
 
 			internal override TypeWrapper[] InnerClasses
@@ -3527,6 +4015,11 @@ namespace IKVM.Internal
 				return Metadata.GetMethodParameterAnnotations(metadata, index);
 			}
 
+			internal override MethodParametersEntry[] GetMethodParameters(int index)
+			{
+				return Metadata.GetMethodParameters(metadata, index);
+			}
+
 			internal override object[] GetFieldAnnotations(int index)
 			{
 				return Metadata.GetFieldAnnotations(metadata, index);
@@ -3536,17 +4029,50 @@ namespace IKVM.Internal
 			{
 				return finalizeMethod;
 			}
+
+			internal override object[] GetConstantPool()
+			{
+				return Metadata.GetConstantPool(metadata);
+			}
+
+			internal override byte[] GetRawTypeAnnotations()
+			{
+				return Metadata.GetRawTypeAnnotations(metadata);
+			}
+
+			internal override byte[] GetMethodRawTypeAnnotations(int index)
+			{
+				return Metadata.GetMethodRawTypeAnnotations(metadata, index);
+			}
+
+			internal override byte[] GetFieldRawTypeAnnotations(int index)
+			{
+				return Metadata.GetFieldRawTypeAnnotations(metadata, index);
+			}
+
+			internal override TypeWrapper Host
+			{
+				get { return host; }
+			}
 		}
 
 		internal sealed class FinishContext
 		{
+			private readonly TypeWrapper host;
 			private readonly ClassFile classFile;
 			private readonly DynamicOrAotTypeWrapper wrapper;
 			private readonly TypeBuilder typeBuilder;
 			private List<TypeBuilder> nestedTypeBuilders;
 			private MethodInfo callerIDMethod;
 			private List<Item> items;
-			private Dictionary<FieldWrapper, ConstructorBuilder> arfuMap;
+			private Dictionary<FieldWrapper, MethodBuilder> arfuMap;
+			private Dictionary<MethodKey, MethodInfo> invokespecialstubcache;
+			private Dictionary<string, MethodInfo> dynamicClassLiteral;
+#if STATIC_COMPILER
+			private TypeBuilder interfaceHelperMethodsTypeBuilder;
+#else
+			private List<object> liveObjects;
+#endif
 
 			private struct Item
 			{
@@ -3554,11 +4080,17 @@ namespace IKVM.Internal
 				internal object value;
 			}
 
-			internal FinishContext(ClassFile classFile, DynamicOrAotTypeWrapper wrapper, TypeBuilder typeBuilder)
+			internal FinishContext(TypeWrapper host, ClassFile classFile, DynamicOrAotTypeWrapper wrapper, TypeBuilder typeBuilder)
 			{
+				this.host = host;
 				this.classFile = classFile;
 				this.wrapper = wrapper;
 				this.typeBuilder = typeBuilder;
+			}
+
+			internal DynamicTypeWrapper TypeWrapper
+			{
+				get { return wrapper; }
 			}
 
 			internal T GetValue<T>(int key)
@@ -3584,8 +4116,61 @@ namespace IKVM.Internal
 				return val;
 			}
 
-			internal void EmitCallerID(CodeEmitter ilgen)
+			internal void EmitDynamicClassLiteral(CodeEmitter ilgen, TypeWrapper tw, bool dynamicCallerID)
 			{
+				Debug.Assert(tw.IsUnloadable);
+				if (dynamicClassLiteral == null)
+				{
+					dynamicClassLiteral = new Dictionary<string, MethodInfo>();
+				}
+				string cacheKey = tw.Name;
+				if (dynamicCallerID)
+				{
+					cacheKey += ";dynamic";
+				}
+				MethodInfo method;
+				if (!dynamicClassLiteral.TryGetValue(cacheKey, out method))
+				{
+					FieldBuilder fb = typeBuilder.DefineField("__<>class", CoreClasses.java.lang.Class.Wrapper.TypeAsSignatureType, FieldAttributes.PrivateScope | FieldAttributes.Static);
+					MethodBuilder mb = DefineHelperMethod("__<>class", CoreClasses.java.lang.Class.Wrapper.TypeAsSignatureType, Type.EmptyTypes);
+					CodeEmitter ilgen2 = CodeEmitter.Create(mb);
+					ilgen2.Emit(OpCodes.Ldsfld, fb);
+					CodeEmitterLabel label = ilgen2.DefineLabel();
+					ilgen2.EmitBrtrue(label);
+					ilgen2.Emit(OpCodes.Ldstr, tw.Name);
+					EmitCallerID(ilgen2, dynamicCallerID);
+					ilgen2.Emit(OpCodes.Call, ByteCodeHelperMethods.DynamicClassLiteral);
+					ilgen2.Emit(OpCodes.Stsfld, fb);
+					ilgen2.MarkLabel(label);
+					ilgen2.Emit(OpCodes.Ldsfld, fb);
+					ilgen2.Emit(OpCodes.Ret);
+					ilgen2.DoEmit();
+					method = mb;
+					dynamicClassLiteral.Add(cacheKey, method);
+				}
+				ilgen.Emit(OpCodes.Call, method);
+			}
+
+			internal void EmitHostCallerID(CodeEmitter ilgen)
+			{
+#if STATIC_COMPILER || FIRST_PASS
+				throw new InvalidOperationException();
+#else
+				EmitLiveObjectLoad(ilgen, DynamicCallerIDProvider.CreateCallerID(host));
+				CoreClasses.ikvm.@internal.CallerID.Wrapper.EmitCheckcast(ilgen);
+#endif
+			}
+
+			internal void EmitCallerID(CodeEmitter ilgen, bool dynamic)
+			{
+#if !FIRST_PASS && !STATIC_COMPILER
+				if (dynamic)
+				{
+					EmitLiveObjectLoad(ilgen, DynamicCallerIDProvider.Instance);
+					ilgen.Emit(OpCodes.Call, ByteCodeHelperMethods.DynamicCallerID);
+					return;
+				}
+#endif
 				if (callerIDMethod == null)
 				{
 					CreateGetCallerID();
@@ -3597,7 +4182,7 @@ namespace IKVM.Internal
 			{
 				TypeWrapper tw = CoreClasses.ikvm.@internal.CallerID.Wrapper;
 				FieldBuilder callerIDField = typeBuilder.DefineField("__<callerID>", tw.TypeAsSignatureType, FieldAttributes.Private | FieldAttributes.Static | FieldAttributes.SpecialName);
-				MethodBuilder mb = typeBuilder.DefineMethod("__<GetCallerID>", MethodAttributes.Private | MethodAttributes.Static | MethodAttributes.SpecialName, tw.TypeAsSignatureType, Type.EmptyTypes);
+				MethodBuilder mb = DefineHelperMethod("__<GetCallerID>", tw.TypeAsSignatureType, Type.EmptyTypes);
 				callerIDMethod = mb;
 				CodeEmitter ilgen = CodeEmitter.Create(mb);
 				ilgen.Emit(OpCodes.Ldsfld, callerIDField);
@@ -3697,20 +4282,23 @@ namespace IKVM.Internal
 									CodeEmitter ilgen = CodeEmitter.Create(mb);
 									ilgen.EmitThrow("java.lang.AbstractMethodError", mw.DeclaringType.Name + "." + mw.Name + mw.Signature);
 									ilgen.DoEmit();
+									wrapper.EmitLevel4Warning(HardError.AbstractMethodError, mw.DeclaringType.Name + "." + mw.Name + mw.Signature);
 								}
 							}
 						}
 						parent = parent.BaseTypeWrapper;
 					}
 				}
-				Dictionary<MethodKey, MethodInfo> invokespecialstubcache = new Dictionary<MethodKey, MethodInfo>();
+#if STATIC_COMPILER
+				TypeBuilder tbDefaultMethods = null;
+#endif
 				bool basehasclinit = wrapper.BaseTypeWrapper != null && wrapper.BaseTypeWrapper.HasStaticInitializer;
 				int clinitIndex = -1;
 				bool hasConstructor = false;
 				for (int i = 0; i < classFile.Methods.Length; i++)
 				{
 					ClassFile.Method m = classFile.Methods[i];
-					MethodBase mb = methods[i].GetMethod();
+					MethodBuilder mb = (MethodBuilder)methods[i].GetMethod();
 					if (mb == null)
 					{
 						// method doesn't really exist (e.g. delegate constructor or <clinit> that is optimized away)
@@ -3729,11 +4317,17 @@ namespace IKVM.Internal
 					else if (m.IsConstructor)
 					{
 						hasConstructor = true;
-						CodeEmitter ilGenerator = CodeEmitter.Create((MethodBuilder)mb);
-						CompileConstructorBody(this, ilGenerator, i, invokespecialstubcache);
+						CodeEmitter ilGenerator = CodeEmitter.Create(mb);
+						CompileConstructorBody(this, ilGenerator, i);
 					}
 					else
 					{
+#if STATIC_COMPILER
+						if (methods[i].GetParameters().Length > MethodHandleUtil.MaxArity && methods[i].RequiresNonVirtualDispatcher && wrapper.GetClassLoader().EmitNoRefEmitHelpers)
+						{
+							wrapper.GetClassLoader().GetTypeWrapperFactory().DefineDelegate(methods[i].GetParameters().Length, methods[i].ReturnType == PrimitiveTypeWrapper.VOID);
+						}
+#endif
 						if (m.IsAbstract)
 						{
 							bool stub = false;
@@ -3742,6 +4336,7 @@ namespace IKVM.Internal
 								// NOTE in the JVM it is apparently legal for a non-abstract class to have abstract methods, but
 								// the CLR doens't allow this, so we have to emit a method that throws an AbstractMethodError
 								stub = true;
+								wrapper.EmitLevel4Warning(HardError.AbstractMethodError, classFile.Name + "." + m.Name + m.Signature);
 							}
 							else if (classFile.IsPublic && !classFile.IsFinal && !(m.IsPublic || m.IsProtected))
 							{
@@ -3751,7 +4346,7 @@ namespace IKVM.Internal
 							}
 							if (stub)
 							{
-								CodeEmitter ilGenerator = CodeEmitter.Create((MethodBuilder)mb);
+								CodeEmitter ilGenerator = CodeEmitter.Create(mb);
 								TraceHelper.EmitMethodTrace(ilGenerator, classFile.Name + "." + m.Name + m.Signature);
 								ilGenerator.EmitThrow("java.lang.AbstractMethodError", classFile.Name + "." + m.Name + m.Signature);
 								ilGenerator.DoEmit();
@@ -3765,17 +4360,22 @@ namespace IKVM.Internal
 							}
 							if (wrapper.IsDelegate)
 							{
-								((MethodBuilder)mb).SetImplementationFlags(mb.GetMethodImplementationFlags() | MethodImplAttributes.Runtime);
+								mb.SetImplementationFlags(mb.GetMethodImplementationFlags() | MethodImplAttributes.Runtime);
 								continue;
 							}
 							Profiler.Enter("JavaTypeImpl.Finish.Native");
 							try
 							{
-								CodeEmitter ilGenerator = CodeEmitter.Create((MethodBuilder)mb);
+								CodeEmitter ilGenerator = CodeEmitter.Create(mb);
 								TraceHelper.EmitMethodTrace(ilGenerator, classFile.Name + "." + m.Name + m.Signature);
 #if STATIC_COMPILER
 								// do we have an implementation in map.xml?
 								if (wrapper.EmitMapXmlMethodPrologueAndOrBody(ilGenerator, classFile, m))
+								{
+									ilGenerator.DoEmit();
+									continue;
+								}
+								if (m.InterlockedCompareAndSetField != null && EmitInterlockedCompareAndSet(methods[i], m.InterlockedCompareAndSetField, ilGenerator))
 								{
 									ilGenerator.DoEmit();
 									continue;
@@ -3788,26 +4388,33 @@ namespace IKVM.Internal
 								if (nativeCodeType == null)
 								{
 									// simple JNI like class name mangling
-									nativeCodeType = StaticCompiler.GetType(wrapper.GetClassLoader(), "Java_" + classFile.Name.Replace('.', '_'));
+									nativeCodeType = StaticCompiler.GetType(wrapper.GetClassLoader(), "Java_" + classFile.Name.Replace('.', '_').Replace("$", "_00024"));
 								}
 #endif
 								MethodInfo nativeMethod = null;
 								TypeWrapper[] args = methods[i].GetParameters();
+								TypeWrapper[] nargs = args;
 								if (nativeCodeType != null)
 								{
-									TypeWrapper[] nargs = args;
 									if (!m.IsStatic)
 									{
-										nargs = new TypeWrapper[args.Length + 1];
-										args.CopyTo(nargs, 1);
-										nargs[0] = this.wrapper;
+										nargs = ArrayUtil.Concat(wrapper, args);
+									}
+									if (methods[i].HasCallerID)
+									{
+										nargs = ArrayUtil.Concat(nargs, CoreClasses.ikvm.@internal.CallerID.Wrapper);
 									}
 									MethodInfo[] nativeCodeTypeMethods = nativeCodeType.GetMethods(BindingFlags.Static | BindingFlags.Public);
 									foreach (MethodInfo method in nativeCodeTypeMethods)
 									{
 										ParameterInfo[] param = method.GetParameters();
-										TypeWrapper[] match = new TypeWrapper[param.Length];
-										for (int j = 0; j < param.Length; j++)
+										int paramLength = param.Length;
+										while (paramLength != 0 && (param[paramLength - 1].IsIn || param[paramLength - 1].ParameterType.IsByRef))
+										{
+											paramLength--;
+										}
+										TypeWrapper[] match = new TypeWrapper[paramLength];
+										for (int j = 0; j < paramLength; j++)
 										{
 											match[j] = ClassLoaderWrapper.GetWrapperFromType(param[j].ParameterType);
 										}
@@ -3821,15 +4428,60 @@ namespace IKVM.Internal
 								}
 								if (nativeMethod != null)
 								{
-									int add = 0;
-									if (!m.IsStatic)
+#if STATIC_COMPILER
+									for (int j = 0; j < nargs.Length; j++)
 									{
-										ilGenerator.Emit(OpCodes.Ldarg_0);
-										add = 1;
+										ilGenerator.EmitLdarg(j);
 									}
-									for (int j = 0; j < args.Length; j++)
+									ParameterInfo[] param = nativeMethod.GetParameters();
+									for (int j = nargs.Length; j < param.Length; j++)
 									{
-										ilGenerator.EmitLdarg(j + add);
+										Type paramType = param[j].ParameterType;
+										TypeWrapper fieldTypeWrapper = ClassLoaderWrapper.GetWrapperFromType(paramType.IsByRef ? paramType.GetElementType() : paramType);
+										FieldWrapper field = wrapper.GetFieldWrapper(param[j].Name, fieldTypeWrapper.SigName);
+										if (field == null)
+										{
+											Console.Error.WriteLine("Error: Native method field binding not found: {0}.{1}{2}", classFile.Name, param[j].Name, fieldTypeWrapper.SigName);
+											StaticCompiler.errorCount++;
+											continue;
+										}
+										if (m.IsStatic && !field.IsStatic)
+										{
+											Console.Error.WriteLine("Error: Native method field binding cannot access instance field from static method: {0}.{1}{2}", classFile.Name, param[j].Name, fieldTypeWrapper.SigName);
+											StaticCompiler.errorCount++;
+											continue;
+										}
+										if (!field.IsAccessibleFrom(wrapper, wrapper, wrapper))
+										{
+											Console.Error.WriteLine("Error: Native method field binding not accessible: {0}.{1}{2}", classFile.Name, param[j].Name, fieldTypeWrapper.SigName);
+											StaticCompiler.errorCount++;
+											continue;
+										}
+										if (paramType.IsByRef && field.IsFinal)
+										{
+											Console.Error.WriteLine("Error: Native method field binding cannot use ByRef for final field: {0}.{1}{2}", classFile.Name, param[j].Name, fieldTypeWrapper.SigName);
+											StaticCompiler.errorCount++;
+											continue;
+										}
+										field.Link();
+										if (paramType.IsByRef && field.GetField() == null)
+										{
+											Console.Error.WriteLine("Error: Native method field binding cannot use ByRef on field without backing field: {0}.{1}{2}", classFile.Name, param[j].Name, fieldTypeWrapper.SigName);
+											StaticCompiler.errorCount++;
+											continue;
+										}
+										if (!field.IsStatic)
+										{
+											ilGenerator.EmitLdarg(0);
+										}
+										if (paramType.IsByRef)
+										{
+											ilGenerator.Emit(field.IsStatic ? OpCodes.Ldsflda : OpCodes.Ldflda, field.GetField());
+										}
+										else
+										{
+											field.EmitGet(ilGenerator);
+										}
 									}
 									ilGenerator.Emit(OpCodes.Call, nativeMethod);
 									TypeWrapper retTypeWrapper = methods[i].ReturnType;
@@ -3838,6 +4490,7 @@ namespace IKVM.Internal
 										ilGenerator.Emit(OpCodes.Castclass, retTypeWrapper.TypeAsTBD);
 									}
 									ilGenerator.Emit(OpCodes.Ret);
+#endif
 								}
 								else
 								{
@@ -3877,8 +4530,25 @@ namespace IKVM.Internal
 						}
 						else
 						{
-							MethodBuilder mbld = (MethodBuilder)mb;
-							CodeEmitter ilGenerator = CodeEmitter.Create(mbld);
+							if (m.IsVirtual && classFile.IsInterface)
+							{
+								mb = (MethodBuilder)DefaultInterfaceMethodWrapper.GetImpl(methods[i]);
+#if STATIC_COMPILER
+								CreateDefaultMethodInterop(ref tbDefaultMethods, mb, methods[i]);
+#endif
+							}
+							CodeEmitter ilGenerator = CodeEmitter.Create(mb);
+							if (!m.IsStatic && !m.IsPublic && classFile.IsInterface)
+							{
+								// Java 8 non-virtual interface method that we compile as a static method,
+								// we need to make sure the passed in this reference isn't null
+								ilGenerator.EmitLdarg(0);
+								if (wrapper.IsGhost)
+								{
+									ilGenerator.Emit(OpCodes.Ldfld, wrapper.GhostRefField);
+								}
+								ilGenerator.EmitNullCheck();
+							}
 							TraceHelper.EmitMethodTrace(ilGenerator, classFile.Name + "." + m.Name + m.Signature);
 #if STATIC_COMPILER
 							// do we have an implementation in map.xml?
@@ -3889,15 +4559,15 @@ namespace IKVM.Internal
 							}
 #endif // STATIC_COMPILER
 							bool nonleaf = false;
-							Compiler.Compile(this, wrapper, methods[i], classFile, m, ilGenerator, ref nonleaf, invokespecialstubcache);
+							Compiler.Compile(this, host, wrapper, methods[i], classFile, m, ilGenerator, ref nonleaf);
 							ilGenerator.CheckLabels();
 							ilGenerator.DoEmit();
-							if (nonleaf)
+							if (nonleaf && !m.IsForceInline)
 							{
-								mbld.SetImplementationFlags(mbld.GetMethodImplementationFlags() | MethodImplAttributes.NoInlining);
+								mb.SetImplementationFlags(mb.GetMethodImplementationFlags() | MethodImplAttributes.NoInlining);
 							}
 #if STATIC_COMPILER
-							ilGenerator.EmitLineNumberTable(methods[i].GetMethod());
+							ilGenerator.EmitLineNumberTable(mb);
 #else // STATIC_COMPILER
 							byte[] linenumbers = ilGenerator.GetLineNumberTable();
 							if (linenumbers != null)
@@ -3913,6 +4583,8 @@ namespace IKVM.Internal
 					}
 				}
 
+				AddInheritedDefaultInterfaceMethods(methods);
+
 				if (clinitIndex != -1 || (basehasclinit && !classFile.IsInterface) || classFile.HasInitializedFields)
 				{
 					MethodBuilder cb;
@@ -3922,7 +4594,7 @@ namespace IKVM.Internal
 					}
 					else
 					{
-						cb = ReflectUtil.DefineTypeInitializer(typeBuilder);
+						cb = ReflectUtil.DefineTypeInitializer(typeBuilder, wrapper.classLoader);
 						AttributeHelper.HideFromJava(cb);
 					}
 					CodeEmitter ilGenerator = CodeEmitter.Create(cb);
@@ -3934,7 +4606,7 @@ namespace IKVM.Internal
 					}
 					if (clinitIndex != -1)
 					{
-						CompileConstructorBody(this, ilGenerator, clinitIndex, invokespecialstubcache);
+						CompileConstructorBody(this, ilGenerator, clinitIndex);
 					}
 					else
 					{
@@ -3957,8 +4629,7 @@ namespace IKVM.Internal
 					// - we don't want the synthesized constructor to show up in Java
 					if (!hasConstructor)
 					{
-						ConstructorBuilder cb = typeBuilder.DefineConstructor(MethodAttributes.PrivateScope, CallingConventions.Standard, Type.EmptyTypes);
-						CodeEmitter ilgen = CodeEmitter.Create(cb);
+						CodeEmitter ilgen = CodeEmitter.Create(ReflectUtil.DefineConstructor(typeBuilder, MethodAttributes.PrivateScope, Type.EmptyTypes));
 						ilgen.Emit(OpCodes.Ldnull);
 						ilgen.Emit(OpCodes.Throw);
 						ilgen.DoEmit();
@@ -3990,51 +4661,20 @@ namespace IKVM.Internal
 					{
 						AddUnsupportedAbstractMethods();
 					}
-					wrapper.automagicSerializationCtor = Serialization.AddAutomagicSerialization(wrapper, typeBuilder);
+					if (!wrapper.GetClassLoader().NoAutomagicSerialization)
+					{
+						wrapper.automagicSerializationCtor = Serialization.AddAutomagicSerialization(wrapper, typeBuilder);
+					}
 				}
 
 #if STATIC_COMPILER
 				// If we're an interface that has public/protected fields, we create an inner class
 				// to expose these fields to C# (which stubbornly refuses to see fields in interfaces).
-				TypeBuilder tbFields = null;
-				if (classFile.IsInterface && classFile.IsPublic && !wrapper.IsGhost && classFile.Fields.Length > 0)
-				{
-					CompilerClassLoader ccl = wrapper.classLoader;
-					string name = "__Fields";
-					while (!ccl.ReserveName(classFile.Name + "$" + name))
-					{
-						name += "_";
-					}
-					tbFields = typeBuilder.DefineNestedType(name, TypeAttributes.Class | TypeAttributes.NestedPublic | TypeAttributes.Sealed | TypeAttributes.Abstract);
-					AttributeHelper.HideFromJava(tbFields);
-					CodeEmitter ilgenClinit = null;
-					for (int i = 0; i < classFile.Fields.Length; i++)
-					{
-						ClassFile.Field f = classFile.Fields[i];
-						if (f.ConstantValue != null)
-						{
-							FieldAttributes attribs = FieldAttributes.Public | FieldAttributes.Static | FieldAttributes.Literal;
-							FieldBuilder fb = tbFields.DefineField(f.Name, fields[i].FieldTypeWrapper.TypeAsSignatureType, attribs);
-							fb.SetConstant(f.ConstantValue);
-						}
-						else
-						{
-							FieldAttributes attribs = FieldAttributes.Public | FieldAttributes.Static | FieldAttributes.InitOnly;
-							FieldBuilder fb = tbFields.DefineField(f.Name, ToPublicSignatureType(fields[i].FieldTypeWrapper), attribs);
-							if (ilgenClinit == null)
-							{
-								ilgenClinit = CodeEmitter.Create(tbFields.DefineTypeInitializer());
-							}
-							wrapper.GetFieldWrapper(f.Name, f.Signature).EmitGet(ilgenClinit);
-							ilgenClinit.Emit(OpCodes.Stsfld, fb);
-						}
-					}
-					if (ilgenClinit != null)
-					{
-						ilgenClinit.Emit(OpCodes.Ret);
-						ilgenClinit.DoEmit();
-					}
-				}
+				AddInterfaceFieldsInterop(fields);
+
+				// If we're a Java 8 interface with static methods, we create an inner class
+				// to expose these methods to C#.
+				AddInterfaceMethodsInterop(methods);
 
 				// See if there is any additional metadata
 				wrapper.EmitMapXmlMetadata(typeBuilder, classFile, fields, methods);
@@ -4044,96 +4684,42 @@ namespace IKVM.Internal
 				{
 					AddAccessStubs();
 				}
+
+				AddConstantPoolAttributeIfNecessary(classFile, typeBuilder);
 #endif // STATIC_COMPILER
 
 				for (int i = 0; i < classFile.Methods.Length; i++)
 				{
 					ClassFile.Method m = classFile.Methods[i];
-					MethodBase mb = methods[i].GetMethod();
+					MethodBuilder mb = (MethodBuilder)methods[i].GetMethod();
 					if (mb == null)
 					{
 						continue;
 					}
-					ParameterBuilder returnParameter = null;
-					ParameterBuilder[] parameterBuilders = null;
-					string[] parameterNames = null;
-					if (wrapper.GetClassLoader().EmitDebugInfo
-#if STATIC_COMPILER
- || (classFile.IsPublic && (m.IsPublic || m.IsProtected))
-#endif
-)
-					{
-						parameterNames = new string[methods[i].GetParameters().Length];
-						GetParameterNamesFromLVT(m, parameterNames);
-						GetParameterNamesFromSig(m.Signature, parameterNames);
-#if STATIC_COMPILER
-						wrapper.GetParameterNamesFromXml(m.Name, m.Signature, parameterNames);
-#endif
-						parameterBuilders = GetParameterBuilders(mb, parameterNames.Length, parameterNames);
-					}
-#if STATIC_COMPILER
-					if ((m.Modifiers & Modifiers.VarArgs) != 0 && !methods[i].HasCallerID)
-					{
-						if (parameterBuilders == null)
-						{
-							parameterBuilders = GetParameterBuilders(mb, methods[i].GetParameters().Length, null);
-						}
-						if (parameterBuilders.Length > 0)
-						{
-							AttributeHelper.SetParamArrayAttribute(parameterBuilders[parameterBuilders.Length - 1]);
-						}
-					}
-					wrapper.AddXmlMapParameterAttributes(mb, classFile.Name, m.Name, m.Signature, ref parameterBuilders);
-#endif
-					ConstructorBuilder cb = mb as ConstructorBuilder;
-					MethodBuilder mBuilder = mb as MethodBuilder;
 					if (m.Annotations != null)
 					{
+						ParameterBuilder returnParameter = null;
 						foreach (object[] def in m.Annotations)
 						{
-							Annotation annotation = Annotation.Load(wrapper.GetClassLoader(), def);
+							Annotation annotation = Annotation.Load(wrapper, def);
 							if (annotation != null)
 							{
-								if (cb != null)
-								{
-									annotation.Apply(wrapper.GetClassLoader(), cb, def);
-								}
-								if (mBuilder != null)
-								{
-									annotation.Apply(wrapper.GetClassLoader(), mBuilder, def);
-									annotation.ApplyReturnValue(wrapper.GetClassLoader(), mBuilder, ref returnParameter, def);
-								}
+								annotation.Apply(wrapper.GetClassLoader(), mb, def);
+								annotation.ApplyReturnValue(wrapper.GetClassLoader(), mb, ref returnParameter, def);
 							}
 						}
 					}
-					if (m.ParameterAnnotations != null)
-					{
-						if (parameterBuilders == null)
-						{
-							parameterBuilders = GetParameterBuilders(mb, methods[i].GetParameters().Length, null);
-						}
-						object[][] defs = m.ParameterAnnotations;
-						for (int j = 0; j < defs.Length; j++)
-						{
-							foreach (object[] def in defs[j])
-							{
-								Annotation annotation = Annotation.Load(wrapper.GetClassLoader(), def);
-								if (annotation != null)
-								{
-									annotation.Apply(wrapper.GetClassLoader(), parameterBuilders[j], def);
-								}
-							}
-						}
-					}
+					string[] parameterNames;
+					AddMethodParameterInfo(m, methods[i], mb, out parameterNames);
 #if STATIC_COMPILER
 					if (methods[i].HasCallerID)
 					{
-						AttributeHelper.SetEditorBrowsableNever((MethodBuilder)mb);
+						AttributeHelper.SetEditorBrowsableNever(mb);
 						EmitCallerIDStub(methods[i], parameterNames);
 					}
 					if (m.DllExportName != null && wrapper.classLoader.TryEnableUnmanagedExports())
 					{
-						mBuilder.__AddUnmanagedExport(m.DllExportName, m.DllExportOrdinal);
+						mb.__AddUnmanagedExport(m.DllExportName, m.DllExportOrdinal);
 					}
 #endif // STATIC_COMPILER
 				}
@@ -4144,7 +4730,7 @@ namespace IKVM.Internal
 					{
 						foreach (object[] def in classFile.Fields[i].Annotations)
 						{
-							Annotation annotation = Annotation.Load(wrapper.GetClassLoader(), def);
+							Annotation annotation = Annotation.Load(wrapper, def);
 							if (annotation != null)
 							{
 								{
@@ -4167,13 +4753,17 @@ namespace IKVM.Internal
 				{
 					foreach (object[] def in classFile.Annotations)
 					{
-						Annotation annotation = Annotation.Load(wrapper.GetClassLoader(), def);
+						Annotation annotation = Annotation.Load(wrapper, def);
 						if (annotation != null)
 						{
 							annotation.Apply(wrapper.GetClassLoader(), typeBuilder, def);
 						}
 					}
 				}
+
+#if STATIC_COMPILER
+				AddImplementsAttribute();
+#endif
 
 				Type type;
 				Profiler.Enter("TypeBuilder.CreateType");
@@ -4189,14 +4779,10 @@ namespace IKVM.Internal
 							tb.CreateType();
 						}
 					}
-#if STATIC_COMPILER
-					if (tbFields != null)
+#if !STATIC_COMPILER
+					if (liveObjects != null)
 					{
-						tbFields.CreateType();
-					}
-					if (classFile.IsInterface && !classFile.IsPublic)
-					{
-						((DynamicClassLoader)wrapper.classLoader.GetTypeWrapperFactory()).DefineProxyHelper(type);
+						typeof(IKVM.Runtime.LiveObjectHolder<>).MakeGenericType(type).GetField("values", BindingFlags.Static | BindingFlags.Public).SetValue(null, liveObjects.ToArray());
 					}
 #endif
 				}
@@ -4213,6 +4799,516 @@ namespace IKVM.Internal
 #endif
 				BakedTypeCleanupHack.Process(wrapper);
 				return type;
+			}
+
+#if STATIC_COMPILER
+			private static void AddConstantPoolAttributeIfNecessary(ClassFile classFile, TypeBuilder typeBuilder)
+			{
+				object[] constantPool = null;
+				bool[] inUse = null;
+				MarkConstantPoolUsage(classFile, classFile.RuntimeVisibleTypeAnnotations, ref constantPool, ref inUse);
+				foreach (ClassFile.Method method in classFile.Methods)
+				{
+					MarkConstantPoolUsage(classFile, method.RuntimeVisibleTypeAnnotations, ref constantPool, ref inUse);
+				}
+				foreach (ClassFile.Field field in classFile.Fields)
+				{
+					MarkConstantPoolUsage(classFile, field.RuntimeVisibleTypeAnnotations, ref constantPool, ref inUse);
+				}
+				if (constantPool != null)
+				{
+					// to save space, we clear out the items that aren't used by the RuntimeVisibleTypeAnnotations and
+					// use an RLE for the empty slots
+					AttributeHelper.SetConstantPoolAttribute(typeBuilder, ConstantPoolAttribute.Compress(constantPool, inUse));
+				}
+			}
+
+			private static void MarkConstantPoolUsage(ClassFile classFile, byte[] runtimeVisibleTypeAnnotations, ref object[] constantPool, ref bool[] inUse)
+			{
+				if (runtimeVisibleTypeAnnotations != null)
+				{
+					if (constantPool == null)
+					{
+						constantPool = classFile.GetConstantPool();
+						inUse = new bool[constantPool.Length];
+					}
+					try
+					{
+						BigEndianBinaryReader br = new BigEndianBinaryReader(runtimeVisibleTypeAnnotations, 0, runtimeVisibleTypeAnnotations.Length);
+						ushort num_annotations = br.ReadUInt16();
+						for (int i = 0; i < num_annotations; i++)
+						{
+							MarkConstantPoolUsageForTypeAnnotation(br, inUse);
+						}
+						return;
+					}
+					catch (ClassFormatError)
+					{
+					}
+					catch (IndexOutOfRangeException)
+					{
+					}
+					// if we fail to parse the annotations (e.g. due to a malformed attribute), we simply keep all the constant pool entries
+					for (int i = 0; i < inUse.Length; i++)
+					{
+						inUse[i] = true;
+					}
+				}
+			}
+
+			private static void MarkConstantPoolUsageForTypeAnnotation(BigEndianBinaryReader br, bool[] inUse)
+			{
+				switch (br.ReadByte())		// target_type
+				{
+					case 0x00:
+					case 0x01:
+						br.ReadByte();		// type_parameter_index
+						break;
+					case 0x10:
+						br.ReadUInt16();	// supertype_index
+						break;
+					case 0x11:
+					case 0x12:
+						br.ReadByte();		// type_parameter_index
+						br.ReadByte();		// bound_index
+						break;
+					case 0x13:
+					case 0x14:
+					case 0x15:
+						// empty_target
+						break;
+					case 0x16:
+						br.ReadByte();		// formal_parameter_index
+						break;
+					case 0x17:
+						br.ReadUInt16();	// throws_type_index
+						break;
+					default:
+						throw new ClassFormatError("");
+				}
+				byte path_length = br.ReadByte();
+				for (int i = 0; i < path_length; i++)
+				{
+					br.ReadByte();			// type_path_kind
+					br.ReadByte();			// type_argument_index
+				}
+				MarkConstantPoolUsageForAnnotation(br, inUse);
+			}
+
+			private static void MarkConstantPoolUsageForAnnotation(BigEndianBinaryReader br, bool[] inUse)
+			{
+				ushort type_index = br.ReadUInt16();
+				inUse[type_index] = true;
+				ushort num_components = br.ReadUInt16();
+				for (int i = 0; i < num_components; i++)
+				{
+					ushort component_name_index = br.ReadUInt16();
+					inUse[component_name_index] = true;
+					MarkConstantPoolUsageForAnnotationComponentValue(br, inUse);
+				}
+			}
+
+			private static void MarkConstantPoolUsageForAnnotationComponentValue(BigEndianBinaryReader br, bool[] inUse)
+			{
+				switch ((char)br.ReadByte())	// tag
+				{
+					case 'B':
+					case 'C':
+					case 'D':
+					case 'F':
+					case 'I':
+					case 'J':
+					case 'S':
+					case 'Z':
+					case 's':
+					case 'c':
+						inUse[br.ReadUInt16()] = true;
+						break;
+					case 'e':
+						inUse[br.ReadUInt16()] = true;
+						inUse[br.ReadUInt16()] = true;
+						break;
+					case '@':
+						MarkConstantPoolUsageForAnnotation(br, inUse);
+						break;
+					case '[':
+						ushort num_values = br.ReadUInt16();
+						for (int i = 0; i < num_values; i++)
+						{
+							MarkConstantPoolUsageForAnnotationComponentValue(br, inUse);
+						}
+						break;
+					default:
+						throw new ClassFormatError("");
+				}
+			}
+
+			private bool EmitInterlockedCompareAndSet(MethodWrapper method, string fieldName, CodeEmitter ilGenerator)
+			{
+				if (method.ReturnType != PrimitiveTypeWrapper.BOOLEAN)
+				{
+					return false;
+				}
+				TypeWrapper[] parameters = method.GetParameters();
+				TypeWrapper target;
+				int firstValueIndex;
+				if (method.IsStatic)
+				{
+					if (parameters.Length != 3)
+					{
+						return false;
+					}
+					target = parameters[0];
+					firstValueIndex = 1;
+				}
+				else
+				{
+					if (parameters.Length != 2)
+					{
+						return false;
+					}
+					target = method.DeclaringType;
+					firstValueIndex = 0;
+				}
+				if (target.IsUnloadable || target.IsPrimitive || target.IsNonPrimitiveValueType || target.IsGhost)
+				{
+					return false;
+				}
+				TypeWrapper fieldType = parameters[firstValueIndex];
+				if (fieldType != parameters[firstValueIndex + 1])
+				{
+					return false;
+				}
+				if (fieldType.IsUnloadable || fieldType.IsNonPrimitiveValueType || fieldType.IsGhost)
+				{
+					return false;
+				}
+				if (fieldType.IsPrimitive && fieldType != PrimitiveTypeWrapper.LONG && fieldType != PrimitiveTypeWrapper.INT)
+				{
+					return false;
+				}
+				FieldWrapper casField = null;
+				foreach (FieldWrapper fw in target.GetFields())
+				{
+					if (fw.Name == fieldName)
+					{
+						if (casField != null)
+						{
+							return false;
+						}
+						casField = fw;
+					}
+				}
+				if (casField == null)
+				{
+					return false;
+				}
+				if (casField.IsStatic)
+				{
+					return false;
+				}
+				if (casField.FieldTypeWrapper != fieldType)
+				{
+					return false;
+				}
+				if (casField.IsPropertyAccessor)
+				{
+					return false;
+				}
+				if (casField.DeclaringType.TypeAsBaseType == typeBuilder.DeclaringType)
+				{
+					// allow access to fields in outer class
+				}
+				else if (!casField.IsAccessibleFrom(casField.DeclaringType, wrapper, casField.DeclaringType))
+				{
+					return false;
+				}
+				casField.Link();
+				FieldInfo fi = casField.GetField();
+				if (fi == null)
+				{
+					return false;
+				}
+				ilGenerator.EmitLdarg(0);
+				ilGenerator.Emit(OpCodes.Ldflda, fi);
+				ilGenerator.EmitLdarg(2);
+				ilGenerator.EmitLdarg(1);
+				if (fieldType == PrimitiveTypeWrapper.LONG)
+				{
+					ilGenerator.Emit(OpCodes.Call, InterlockedMethods.CompareExchangeInt64);
+				}
+				else if (fieldType == PrimitiveTypeWrapper.INT)
+				{
+					ilGenerator.Emit(OpCodes.Call, InterlockedMethods.CompareExchangeInt32);
+				}
+				else
+				{
+					ilGenerator.Emit(OpCodes.Call, AtomicReferenceFieldUpdaterEmitter.MakeCompareExchange(casField.FieldTypeWrapper.TypeAsSignatureType));
+				}
+				ilGenerator.EmitLdarg(1);
+				ilGenerator.Emit(OpCodes.Ceq);
+				ilGenerator.Emit(OpCodes.Ret);
+				return true;
+			}
+#endif
+
+			private void AddMethodParameterInfo(ClassFile.Method m, MethodWrapper mw, MethodBuilder mb, out string[] parameterNames)
+			{
+				parameterNames = null;
+				ParameterBuilder[] parameterBuilders = null;
+				if (wrapper.GetClassLoader().EmitDebugInfo
+#if STATIC_COMPILER
+					|| (classFile.IsPublic && (m.IsPublic || m.IsProtected))
+					|| (m.MethodParameters != null && !wrapper.GetClassLoader().NoParameterReflection)
+#endif
+					)
+				{
+					parameterNames = new string[mw.GetParameters().Length];
+					GetParameterNamesFromMP(m, parameterNames);
+#if STATIC_COMPILER
+					if (m.MethodParameters == null)
+#endif
+					{
+						GetParameterNamesFromLVT(m, parameterNames);
+						GetParameterNamesFromSig(m.Signature, parameterNames);
+					}
+#if STATIC_COMPILER
+					wrapper.GetParameterNamesFromXml(m.Name, m.Signature, parameterNames);
+#endif
+					parameterBuilders = GetParameterBuilders(mb, parameterNames.Length, parameterNames);
+				}
+#if STATIC_COMPILER
+				if ((m.Modifiers & Modifiers.VarArgs) != 0 && !mw.HasCallerID)
+				{
+					if (parameterBuilders == null)
+					{
+						parameterBuilders = GetParameterBuilders(mb, mw.GetParameters().Length, null);
+					}
+					if (parameterBuilders.Length > 0)
+					{
+						AttributeHelper.SetParamArrayAttribute(parameterBuilders[parameterBuilders.Length - 1]);
+					}
+				}
+				wrapper.AddXmlMapParameterAttributes(mb, classFile.Name, m.Name, m.Signature, ref parameterBuilders);
+#endif
+				if (m.ParameterAnnotations != null)
+				{
+					if (parameterBuilders == null)
+					{
+						parameterBuilders = GetParameterBuilders(mb, mw.GetParameters().Length, null);
+					}
+					object[][] defs = m.ParameterAnnotations;
+					for (int j = 0; j < defs.Length; j++)
+					{
+						foreach (object[] def in defs[j])
+						{
+							Annotation annotation = Annotation.Load(wrapper, def);
+							if (annotation != null)
+							{
+								annotation.Apply(wrapper.GetClassLoader(), parameterBuilders[j], def);
+							}
+						}
+					}
+				}
+			}
+
+#if STATIC_COMPILER
+			private void AddImplementsAttribute()
+			{
+				TypeWrapper[] interfaces = wrapper.Interfaces;
+				if (wrapper.BaseTypeWrapper == CoreClasses.java.lang.Object.Wrapper)
+				{
+					// We special case classes extending java.lang.Object to optimize the metadata encoding
+					// for anonymous classes that implement an interface.
+					Type[] actualInterfaces = typeBuilder.GetInterfaces();
+					if (actualInterfaces.Length == 0)
+					{
+						return;
+					}
+					else if (actualInterfaces.Length == 1
+						&& interfaces.Length == 1
+						&& !interfaces[0].IsRemapped
+						&& interfaces[0].TypeAsBaseType == actualInterfaces[0])
+					{
+						// We extend java.lang.Object and implement only a single (non-remapped) interface,
+						// in this case we can omit the ImplementAttribute since the runtime will be able
+						// to reliable reproduce the "list" of implemented interfaces.
+						return;
+					}
+				}
+				else if (interfaces.Length == 0)
+				{
+					return;
+				}
+				AttributeHelper.SetImplementsAttribute(typeBuilder, interfaces);
+			}
+
+			private TypeBuilder DefineNestedInteropType(string name)
+			{
+				CompilerClassLoader ccl = wrapper.classLoader;
+				while (!ccl.ReserveName(classFile.Name + "$" + name))
+				{
+					name += "_";
+				}
+				TypeBuilder tb = typeBuilder.DefineNestedType(name, TypeAttributes.Class | TypeAttributes.NestedPublic | TypeAttributes.Sealed | TypeAttributes.Abstract);
+				RegisterNestedTypeBuilder(tb);
+				AttributeHelper.HideFromJava(tb);
+				return tb;
+			}
+	
+			private void AddInterfaceFieldsInterop(FieldWrapper[] fields)
+			{
+				if (classFile.IsInterface && classFile.IsPublic && !wrapper.IsGhost && classFile.Fields.Length > 0 && wrapper.classLoader.WorkaroundInterfaceFields)
+				{
+					TypeBuilder tbFields = DefineNestedInteropType(NestedTypeName.Fields);
+					CodeEmitter ilgenClinit = null;
+					for (int i = 0; i < classFile.Fields.Length; i++)
+					{
+						ClassFile.Field f = classFile.Fields[i];
+						if (f.ConstantValue != null)
+						{
+							FieldAttributes attribs = FieldAttributes.Public | FieldAttributes.Static | FieldAttributes.Literal;
+							FieldBuilder fb = tbFields.DefineField(f.Name, fields[i].FieldTypeWrapper.TypeAsSignatureType, attribs);
+							fb.SetConstant(f.ConstantValue);
+						}
+						else
+						{
+							FieldAttributes attribs = FieldAttributes.Public | FieldAttributes.Static | FieldAttributes.InitOnly;
+							FieldBuilder fb = tbFields.DefineField(f.Name, fields[i].FieldTypeWrapper.TypeAsPublicSignatureType, attribs);
+							if (ilgenClinit == null)
+							{
+								ilgenClinit = CodeEmitter.Create(ReflectUtil.DefineTypeInitializer(tbFields, wrapper.classLoader));
+							}
+							wrapper.GetFieldWrapper(f.Name, f.Signature).EmitGet(ilgenClinit);
+							ilgenClinit.Emit(OpCodes.Stsfld, fb);
+						}
+					}
+					if (ilgenClinit != null)
+					{
+						ilgenClinit.Emit(OpCodes.Ret);
+						ilgenClinit.DoEmit();
+					}
+				}
+			}
+
+			private void AddInterfaceMethodsInterop(MethodWrapper[] methods)
+			{
+				if (classFile.IsInterface && classFile.IsPublic && classFile.MajorVersion >= 52 && !wrapper.IsGhost && methods.Length > 0 && wrapper.classLoader.WorkaroundInterfaceStaticMethods)
+				{
+					TypeBuilder tbMethods = null;
+					foreach (MethodWrapper mw in methods)
+					{
+						if (mw.IsStatic && mw.IsPublic && mw.Name != StringConstants.CLINIT && ParametersAreAccessible(mw))
+						{
+							if (tbMethods == null)
+							{
+								tbMethods = DefineNestedInteropType(NestedTypeName.Methods);
+							}
+							MethodBuilder mb = mw.GetDefineMethodHelper().DefineMethod(wrapper.GetClassLoader().GetTypeWrapperFactory(), tbMethods, mw.Name, MethodAttributes.Public | MethodAttributes.Static, null, true);
+							CodeEmitter ilgen = CodeEmitter.Create(mb);
+							TypeWrapper[] parameters = mw.GetParameters();
+							for (int i = 0; i < parameters.Length; i++)
+							{
+								ilgen.EmitLdarg(i);
+								if (!parameters[i].IsUnloadable && !parameters[i].IsPublic)
+								{
+									parameters[i].EmitCheckcast(ilgen);
+								}
+							}
+							mw.EmitCall(ilgen);
+							ilgen.Emit(OpCodes.Ret);
+							ilgen.DoEmit();
+						}
+					}
+				}
+			}
+
+			private void CreateDefaultMethodInterop(ref TypeBuilder tbDefaultMethods, MethodBuilder defaultMethod, MethodWrapper mw)
+			{
+				if (!ParametersAreAccessible(mw))
+				{
+					return;
+				}
+				if (tbDefaultMethods == null)
+				{
+					tbDefaultMethods = DefineNestedInteropType(NestedTypeName.DefaultMethods);
+				}
+				MethodBuilder mb = mw.GetDefineMethodHelper().DefineMethod(wrapper.GetClassLoader().GetTypeWrapperFactory(), tbDefaultMethods, mw.Name, MethodAttributes.Public | MethodAttributes.Static, wrapper.TypeAsSignatureType, true);
+				CodeEmitter ilgen = CodeEmitter.Create(mb);
+				if (wrapper.IsGhost)
+				{
+					ilgen.EmitLdarga(0);
+					ilgen.Emit(OpCodes.Ldfld, wrapper.GhostRefField);
+					ilgen.EmitNullCheck();
+					ilgen.EmitLdarga(0);
+				}
+				else
+				{
+					ilgen.EmitLdarg(0);
+					ilgen.Emit(OpCodes.Dup);
+					ilgen.EmitNullCheck();
+				}
+				TypeWrapper[] parameters = mw.GetParameters();
+				for (int i = 0; i < parameters.Length; i++)
+				{
+					ilgen.EmitLdarg(i + 1);
+					if (!parameters[i].IsUnloadable && !parameters[i].IsPublic)
+					{
+						parameters[i].EmitCheckcast(ilgen);
+					}
+				}
+				ilgen.Emit(OpCodes.Call, defaultMethod);
+				ilgen.Emit(OpCodes.Ret);
+				ilgen.DoEmit();
+			}
+#endif
+
+			private void AddInheritedDefaultInterfaceMethods(MethodWrapper[] methods)
+			{
+				// look at the miranda methods to see if we inherit any default interface methods
+				for (int i = classFile.Methods.Length; i < methods.Length; i++)
+				{
+					if (methods[i].IsMirandaMethod)
+					{
+						MirandaMethodWrapper mmw = (MirandaMethodWrapper)methods[i];
+						if (mmw.Error == null && !mmw.BaseMethod.IsAbstract)
+						{
+							// we inherited a default interface method, so we need to forward the miranda method to the default method
+							MethodBuilder mb = (MethodBuilder)mmw.GetMethod();
+							if (classFile.IsInterface)
+							{
+								// if we're an interface with a default miranda method, we need to create a new default method that forwards to the original
+								mb = methods[i].GetDefineMethodHelper().DefineMethod(wrapper.GetClassLoader().GetTypeWrapperFactory(),
+									typeBuilder, NamePrefix.DefaultMethod + mb.Name, MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.SpecialName, typeBuilder, false);
+							}
+							EmitCallDefaultInterfaceMethod(mb, mmw.BaseMethod);
+						}
+					}
+				}
+			}
+
+			internal static void EmitCallDefaultInterfaceMethod(MethodBuilder mb, MethodWrapper defaultMethod)
+			{
+				CodeEmitter ilgen = CodeEmitter.Create(mb);
+				if (defaultMethod.DeclaringType.IsGhost)
+				{
+					CodeEmitterLocal local = ilgen.DeclareLocal(defaultMethod.DeclaringType.TypeAsSignatureType);
+					ilgen.Emit(OpCodes.Ldloca, local);
+					ilgen.EmitLdarg(0);
+					ilgen.Emit(OpCodes.Stfld, defaultMethod.DeclaringType.GhostRefField);
+					ilgen.Emit(OpCodes.Ldloca, local);
+				}
+				else
+				{
+					ilgen.EmitLdarg(0);
+				}
+				for (int j = 0, count = defaultMethod.GetParameters().Length; j < count; j++)
+				{
+					ilgen.EmitLdarg(j + 1);
+				}
+				ilgen.Emit(OpCodes.Call, DefaultInterfaceMethodWrapper.GetImpl(defaultMethod));
+				ilgen.Emit(OpCodes.Ret);
+				ilgen.DoEmit();
 			}
 
 #if STATIC_COMPILER
@@ -4306,7 +5402,7 @@ namespace IKVM.Internal
 				}
 				else
 				{
-					Type propType = ToPublicSignatureType(fw.FieldTypeWrapper);
+					Type propType = fw.FieldTypeWrapper.TypeAsPublicSignatureType;
 					Type[] modopt = wrapper.GetModOpt(fw.FieldTypeWrapper, true);
 					PropertyBuilder pb = typeBuilder.DefineProperty(fw.Name, PropertyAttributes.None, propType, null, modopt, Type.EmptyTypes, null, null);
 					if (type1)
@@ -4325,9 +5421,7 @@ namespace IKVM.Internal
 					}
 					// we append the IKVM.Attributes.AccessStub type to the modopt array for use in the property accessor method signature
 					// to make sure they never conflict with any user defined methhods
-					Type[] modopt2 = modopt;
-					Array.Resize(ref modopt2, modopt2.Length + 1);
-					modopt2[modopt2.Length - 1] = JVM.LoadType(typeof(IKVM.Attributes.AccessStub));
+					Type[] modopt2 = ArrayUtil.Concat(modopt, JVM.LoadType(typeof(IKVM.Attributes.AccessStub)));
 					MethodBuilder getter = typeBuilder.DefineMethod("get_" + fw.Name, attribs, CallingConventions.Standard, propType, null, modopt2, Type.EmptyTypes, null, null);
 					AttributeHelper.HideFromJava(getter);
 					pb.SetGetMethod(getter);
@@ -4425,13 +5519,11 @@ namespace IKVM.Internal
 				for (int i = 0; i < parameters.Length; i++)
 				{
 					realParameterTypes[i] = parameters[i].TypeAsSignatureType;
-					parameterTypes[i] = ToPublicSignatureType(parameters[i]);
+					parameterTypes[i] = parameters[i].TypeAsPublicSignatureType;
 					modopt[i] = wrapper.GetModOpt(parameters[i], true);
 				}
-				Type returnType = ToPublicSignatureType(mw.ReturnType);
-				Type[] modoptReturnType = wrapper.GetModOpt(mw.ReturnType, true);
-				Array.Resize(ref modoptReturnType, modoptReturnType.Length + 1);
-				modoptReturnType[modoptReturnType.Length - 1] = JVM.LoadType(typeof(IKVM.Attributes.AccessStub));
+				Type returnType = mw.ReturnType.TypeAsPublicSignatureType;
+				Type[] modoptReturnType = ArrayUtil.Concat(wrapper.GetModOpt(mw.ReturnType, true), JVM.LoadType(typeof(IKVM.Attributes.AccessStub)));
 				string name;
 				if (mw.Name == StringConstants.INIT)
 				{
@@ -4485,11 +5577,6 @@ namespace IKVM.Internal
 				ilgen.DoEmit();
 			}
 
-			private static Type ToPublicSignatureType(TypeWrapper tw)
-			{
-				return (tw.IsPublic ? tw : tw.GetPublicBaseTypeWrapper()).TypeAsSignatureType;
-			}
-
 			private bool ParametersAreAccessible(MethodWrapper mw)
 			{
 				foreach (TypeWrapper tw in mw.GetParameters())
@@ -4515,7 +5602,7 @@ namespace IKVM.Internal
 				doneSet.Add(interfaceTypeWrapper, interfaceTypeWrapper);
 				foreach (MethodWrapper method in interfaceTypeWrapper.GetMethods())
 				{
-					if (!method.IsStatic && !method.IsDynamicOnly)
+					if (!method.IsStatic && method.IsPublic && !method.IsDynamicOnly)
 					{
 						ImplementInterfaceMethodStubImpl(method, baseClassInterface);
 					}
@@ -4553,18 +5640,16 @@ namespace IKVM.Internal
 					{
 						// check the loader constraints
 						bool error = false;
-						if (mce.ReturnType != ifmethod.ReturnType)
+						if (mce.ReturnType != ifmethod.ReturnType && !mce.ReturnType.IsUnloadable && !ifmethod.ReturnType.IsUnloadable)
 						{
-							// TODO handle unloadable
 							error = true;
 						}
 						TypeWrapper[] mceparams = mce.GetParameters();
 						TypeWrapper[] ifparams = ifmethod.GetParameters();
 						for (int i = 0; i < mceparams.Length; i++)
 						{
-							if (mceparams[i] != ifparams[i])
+							if (mceparams[i] != ifparams[i] && !mceparams[i].IsUnloadable && !ifparams[i].IsUnloadable)
 							{
-								// TODO handle unloadable
 								error = true;
 								break;
 							}
@@ -4580,62 +5665,26 @@ namespace IKVM.Internal
 							return;
 						}
 					}
-					if (mce.IsMirandaMethod && mce.DeclaringType == wrapper)
-					{
-						// Miranda methods already have a methodimpl (if needed) to implement the correct interface method
-					}
-					else if (!mce.IsPublic && !mce.IsInternal)
+					if (!mce.IsPublic && !mce.IsInternal)
 					{
 						// NOTE according to the ECMA spec it isn't legal for a privatescope method to be virtual, but this works and
 						// it makes sense, so I hope the spec is wrong
 						// UPDATE unfortunately, according to Serge Lidin the spec is correct, and it is not allowed to have virtual privatescope
 						// methods. Sigh! So I have to use private methods and mangle the name
-						MethodBuilder mb = DefineInterfaceStubMethod(mangledName, ifmethod);
+						MethodBuilder mb = DefineInterfaceStubMethod(NamePrefix.Incomplete + mangledName, ifmethod);
 						AttributeHelper.HideFromJava(mb);
 						CodeEmitter ilgen = CodeEmitter.Create(mb);
 						ilgen.EmitThrow("java.lang.IllegalAccessError", wrapper.Name + "." + ifmethod.Name + ifmethod.Signature);
 						ilgen.DoEmit();
 						typeBuilder.DefineMethodOverride(mb, (MethodInfo)ifmethod.GetMethod());
-						wrapper.HasIncompleteInterfaceImplementation = true;
+						wrapper.SetHasIncompleteInterfaceImplementation();
 					}
-					else if (mce.GetMethod() == null || mce.RealName != ifmethod.RealName || mce.IsInternal)
-					{
-						MethodBuilder mb = DefineInterfaceStubMethod(mangledName, ifmethod);
-						AttributeHelper.HideFromJava(mb);
-						CodeEmitter ilGenerator = CodeEmitter.Create(mb);
-						ilGenerator.Emit(OpCodes.Ldarg_0);
-						int argc = mce.GetParameters().Length;
-						for (int n = 0; n < argc; n++)
-						{
-							ilGenerator.EmitLdarg(n + 1);
-						}
-						mce.EmitCallvirt(ilGenerator);
-						ilGenerator.Emit(OpCodes.Ret);
-						ilGenerator.DoEmit();
-						typeBuilder.DefineMethodOverride(mb, (MethodInfo)ifmethod.GetMethod());
-					}
-					else if (!ReflectUtil.IsSameAssembly(mce.DeclaringType.TypeAsTBD, typeBuilder))
+					else if (mce.GetMethod() == null || mce.RealName != ifmethod.RealName || mce.IsInternal || !ReflectUtil.IsSameAssembly(mce.DeclaringType.TypeAsTBD, typeBuilder) || CheckRequireOverrideStub(mce, ifmethod))
 					{
 						// NOTE methods inherited from base classes in a different assembly do *not* automatically implement
 						// interface methods, so we have to generate a stub here that doesn't do anything but call the base
 						// implementation
-						MethodBuilder mb = DefineInterfaceStubMethod(mangledName, ifmethod);
-						typeBuilder.DefineMethodOverride(mb, (MethodInfo)ifmethod.GetMethod());
-						AttributeHelper.HideFromJava(mb);
-						CodeEmitter ilGenerator = CodeEmitter.Create(mb);
-						ilGenerator.Emit(OpCodes.Ldarg_0);
-						int argc = mce.GetParameters().Length;
-						for (int n = 0; n < argc; n++)
-						{
-							ilGenerator.EmitLdarg(n + 1);
-						}
-						mce.EmitCallvirt(ilGenerator);
-						ilGenerator.Emit(OpCodes.Ret);
-						ilGenerator.DoEmit();
-					}
-					else if (CheckRequireOverrideStub(mce, ifmethod))
-					{
-						wrapper.GenerateOverrideStub(typeBuilder, ifmethod, (MethodInfo)mce.GetMethod(), mce);
+						wrapper.GenerateOverrideStub(typeBuilder, ifmethod, null, mce);
 					}
 					else if (baseClassInterface && mce.DeclaringType == wrapper)
 					{
@@ -4648,13 +5697,14 @@ namespace IKVM.Internal
 					{
 						// the type doesn't implement the interface method and isn't abstract either. The JVM allows this, but the CLR doesn't,
 						// so we have to create a stub method that throws an AbstractMethodError
-						MethodBuilder mb = DefineInterfaceStubMethod(mangledName, ifmethod);
+						MethodBuilder mb = DefineInterfaceStubMethod(NamePrefix.Incomplete + mangledName, ifmethod);
 						AttributeHelper.HideFromJava(mb);
 						CodeEmitter ilgen = CodeEmitter.Create(mb);
 						ilgen.EmitThrow("java.lang.AbstractMethodError", wrapper.Name + "." + ifmethod.Name + ifmethod.Signature);
 						ilgen.DoEmit();
 						typeBuilder.DefineMethodOverride(mb, (MethodInfo)ifmethod.GetMethod());
-						wrapper.HasIncompleteInterfaceImplementation = true;
+						wrapper.SetHasIncompleteInterfaceImplementation();
+						wrapper.EmitLevel4Warning(HardError.AbstractMethodError, wrapper.Name + "." + ifmethod.Name + ifmethod.Signature);
 					}
 				}
 			}
@@ -4773,23 +5823,19 @@ namespace IKVM.Internal
 #if !STATIC_COMPILER
 			internal static class JniProxyBuilder
 			{
-				private static ModuleBuilder mod;
+				private readonly static ModuleBuilder mod;
 				private static int count;
 
 				static JniProxyBuilder()
 				{
-					AssemblyName name = new AssemblyName();
-					name.Name = "jniproxy";
-					AssemblyBuilder ab = AppDomain.CurrentDomain.DefineDynamicAssembly(name, JVM.IsSaveDebugImage ? AssemblyBuilderAccess.RunAndSave : AssemblyBuilderAccess.Run);
-					DynamicClassLoader.RegisterForSaveDebug(ab);
-					mod = ab.DefineDynamicModule("jniproxy.dll", "jniproxy.dll");
+					mod = DynamicClassLoader.CreateJniProxyModuleBuilder();
 					CustomAttributeBuilder cab = new CustomAttributeBuilder(JVM.LoadType(typeof(JavaModuleAttribute)).GetConstructor(Type.EmptyTypes), new object[0]);
 					mod.SetCustomAttribute(cab);
 				}
 
 				internal static void Generate(DynamicTypeWrapper.FinishContext context, CodeEmitter ilGenerator, DynamicTypeWrapper wrapper, MethodWrapper mw, TypeBuilder typeBuilder, ClassFile classFile, ClassFile.Method m, TypeWrapper[] args)
 				{
-					TypeBuilder tb = mod.DefineType("__<jni>" + (count++), TypeAttributes.Public | TypeAttributes.Class);
+					TypeBuilder tb = mod.DefineType("__<jni>" + System.Threading.Interlocked.Increment(ref count), TypeAttributes.Public | TypeAttributes.Class);
 					int instance = m.IsStatic ? 0 : 1;
 					Type[] argTypes = new Type[args.Length + instance + 1];
 					if (instance != 0)
@@ -4800,10 +5846,10 @@ namespace IKVM.Internal
 					{
 						// NOTE we take a shortcut here by assuming that all "special" types (i.e. ghost or value types)
 						// are public and so we can get away with replacing all other types with object.
-						argTypes[i + instance] = (args[i].IsPrimitive || args[i].IsGhost || args[i].IsNonPrimitiveValueType) ? args[i].TypeAsSignatureType : typeof(object);
+						argTypes[i + instance] = !args[i].IsUnloadable && (args[i].IsPrimitive || args[i].IsGhost || args[i].IsNonPrimitiveValueType) ? args[i].TypeAsSignatureType : typeof(object);
 					}
-					argTypes[argTypes.Length - 1] = ClassLoaderWrapper.LoadClassCritical("ikvm.internal.CallerID").TypeAsSignatureType;
-					Type retType = (mw.ReturnType.IsPrimitive || mw.ReturnType.IsGhost || mw.ReturnType.IsNonPrimitiveValueType) ? mw.ReturnType.TypeAsSignatureType : typeof(object);
+					argTypes[argTypes.Length - 1] = CoreClasses.ikvm.@internal.CallerID.Wrapper.TypeAsSignatureType;
+					Type retType = !mw.ReturnType.IsUnloadable && (mw.ReturnType.IsPrimitive || mw.ReturnType.IsGhost || mw.ReturnType.IsNonPrimitiveValueType) ? mw.ReturnType.TypeAsSignatureType : typeof(object);
 					MethodBuilder mb = tb.DefineMethod("method", MethodAttributes.Public | MethodAttributes.Static, retType, argTypes);
 					AttributeHelper.HideFromJava(mb);
 					CodeEmitter ilgen = CodeEmitter.Create(mb);
@@ -4814,9 +5860,9 @@ namespace IKVM.Internal
 					{
 						ilGenerator.EmitLdarg(i);
 					}
-					context.EmitCallerID(ilGenerator);
+					context.EmitCallerID(ilGenerator, m.IsLambdaFormCompiled);
 					ilGenerator.Emit(OpCodes.Call, mb);
-					if (!mw.ReturnType.IsPrimitive && !mw.ReturnType.IsGhost && !mw.ReturnType.IsNonPrimitiveValueType)
+					if (!mw.ReturnType.IsUnloadable && !mw.ReturnType.IsPrimitive && !mw.ReturnType.IsGhost && !mw.ReturnType.IsNonPrimitiveValueType)
 					{
 						ilGenerator.Emit(OpCodes.Castclass, mw.ReturnType.TypeAsSignatureType);
 					}
@@ -4870,7 +5916,7 @@ namespace IKVM.Internal
 					}
 					else
 					{
-						context.EmitCallerID(ilGenerator);
+						context.EmitCallerID(ilGenerator, m.IsLambdaFormCompiled);
 					}
 					ilGenerator.Emit(OpCodes.Ldstr, classFile.Name.Replace('.', '/'));
 					ilGenerator.Emit(OpCodes.Ldstr, m.Name);
@@ -4885,14 +5931,14 @@ namespace IKVM.Internal
 					}
 					else
 					{
-						context.EmitCallerID(ilGenerator);
+						context.EmitCallerID(ilGenerator, m.IsLambdaFormCompiled);
 					}
 					ilGenerator.Emit(OpCodes.Call, enterLocalRefStruct);
 					CodeEmitterLocal jnienv = ilGenerator.DeclareLocal(Types.IntPtr);
 					ilGenerator.Emit(OpCodes.Stloc, jnienv);
 					ilGenerator.BeginExceptionBlock();
 					TypeWrapper retTypeWrapper = mw.ReturnType;
-					if (!retTypeWrapper.IsUnloadable && !retTypeWrapper.IsPrimitive)
+					if (retTypeWrapper.IsUnloadable || !retTypeWrapper.IsPrimitive)
 					{
 						// this one is for use after we return from "calli"
 						ilGenerator.Emit(OpCodes.Ldloca, localRefStruct);
@@ -4964,7 +6010,11 @@ namespace IKVM.Internal
 					CodeEmitterLocal retValue = null;
 					if (retTypeWrapper != PrimitiveTypeWrapper.VOID)
 					{
-						if (!retTypeWrapper.IsUnloadable && !retTypeWrapper.IsPrimitive)
+						if (retTypeWrapper.IsUnloadable)
+						{
+							ilGenerator.Emit(OpCodes.Call, unwrapLocalRef);
+						}
+						else if (!retTypeWrapper.IsPrimitive)
 						{
 							ilGenerator.Emit(OpCodes.Call, unwrapLocalRef);
 							if (retTypeWrapper.IsNonPrimitiveValueType)
@@ -5121,13 +6171,12 @@ namespace IKVM.Internal
 					if (!interfaceList.Contains(iface))
 					{
 						interfaceList.Add(iface);
-						// NOTE we're using TypeAsBaseType for the interfaces!
-						Type ifaceType = iface.TypeAsBaseType;
-						if (!iface.IsPublic && !ReflectUtil.IsSameAssembly(ifaceType, typeBuilder))
+						if (!iface.IsAccessibleFrom(wrapper))
 						{
-							ifaceType = ReflectUtil.GetAssembly(ifaceType).GetType(DynamicClassLoader.GetProxyHelperName(ifaceType));
+							continue;
 						}
-						typeBuilder.AddInterfaceImplementation(ifaceType);
+						// NOTE we're using TypeAsBaseType for the interfaces!
+						typeBuilder.AddInterfaceImplementation(iface.TypeAsBaseType);
 #if STATIC_COMPILER
 						if (!wrapper.IsInterface)
 						{
@@ -5251,7 +6300,7 @@ namespace IKVM.Internal
 				}
 			}
 
-			private void CompileConstructorBody(FinishContext context, CodeEmitter ilGenerator, int methodIndex, Dictionary<MethodKey, MethodInfo> invokespecialstubcache)
+			private void CompileConstructorBody(FinishContext context, CodeEmitter ilGenerator, int methodIndex)
 			{
 				MethodWrapper[] methods = wrapper.GetMethods();
 				ClassFile.Method m = classFile.Methods[methodIndex];
@@ -5265,10 +6314,10 @@ namespace IKVM.Internal
 				}
 #endif
 				bool nonLeaf = false;
-				Compiler.Compile(context, wrapper, methods[methodIndex], classFile, m, ilGenerator, ref nonLeaf, invokespecialstubcache);
+				Compiler.Compile(context, host, wrapper, methods[methodIndex], classFile, m, ilGenerator, ref nonLeaf);
 				ilGenerator.DoEmit();
 #if STATIC_COMPILER
-				ilGenerator.EmitLineNumberTable(methods[methodIndex].GetMethod());
+				ilGenerator.EmitLineNumberTable((MethodBuilder)methods[methodIndex].GetMethod());
 #else // STATIC_COMPILER
 				byte[] linenumbers = ilGenerator.GetLineNumberTable();
 				if (linenumbers != null)
@@ -5288,6 +6337,10 @@ namespace IKVM.Internal
 				{
 					for (int i = 0; i < caller.Length; i++)
 					{
+						if (caller[i].IsUnloadable || callee[i].IsUnloadable)
+						{
+							return false;
+						}
 						if (!caller[i].IsAssignableTo(callee[i]))
 						{
 							return false;
@@ -5300,32 +6353,26 @@ namespace IKVM.Internal
 
 			private void EmitCallerIDInitialization(CodeEmitter ilGenerator, FieldInfo callerIDField)
 			{
+				TypeWrapper tw = CoreClasses.ikvm.@internal.CallerID.Wrapper;
+				if (tw.InternalsVisibleTo(wrapper))
 				{
-					// we need to prohibit this optimization at runtime, because proxy classes may be injected into the boot class loader,
-					// but they don't actually have access to core library internals
-#if STATIC_COMPILER
-					TypeWrapper tw = CoreClasses.ikvm.@internal.CallerID.Wrapper;
-					if (tw.GetClassLoader() == wrapper.GetClassLoader())
-					{
-						MethodWrapper create = tw.GetMethodWrapper("create", "(Lcli.System.RuntimeTypeHandle;)Likvm.internal.CallerID;", false);
-						ilGenerator.Emit(OpCodes.Ldtoken, this.typeBuilder);
-						create.Link();
-						create.EmitCall(ilGenerator);
-					}
-					else
-#endif
-					{
-						RegisterNestedTypeBuilder(EmitCreateCallerID(typeBuilder, ilGenerator));
-					}
-					ilGenerator.Emit(OpCodes.Stsfld, callerIDField);
+					MethodWrapper create = tw.GetMethodWrapper("create", "(Lcli.System.RuntimeTypeHandle;)Likvm.internal.CallerID;", false);
+					ilGenerator.Emit(OpCodes.Ldtoken, this.typeBuilder);
+					create.Link();
+					create.EmitCall(ilGenerator);
 				}
+				else
+				{
+					RegisterNestedTypeBuilder(EmitCreateCallerID(typeBuilder, ilGenerator));
+				}
+				ilGenerator.Emit(OpCodes.Stsfld, callerIDField);
 			}
 
 			internal static TypeBuilder EmitCreateCallerID(TypeBuilder typeBuilder, CodeEmitter ilGenerator)
 			{
 				TypeWrapper tw = CoreClasses.ikvm.@internal.CallerID.Wrapper;
-				TypeBuilder typeCallerID = typeBuilder.DefineNestedType("__<CallerID>", TypeAttributes.Sealed | TypeAttributes.NestedPrivate, tw.TypeAsBaseType);
-				ConstructorBuilder cb = typeCallerID.DefineConstructor(MethodAttributes.Assembly, CallingConventions.Standard, null);
+				TypeBuilder typeCallerID = typeBuilder.DefineNestedType(NestedTypeName.CallerID, TypeAttributes.Sealed | TypeAttributes.NestedPrivate, tw.TypeAsBaseType);
+				MethodBuilder cb = ReflectUtil.DefineConstructor(typeCallerID, MethodAttributes.Assembly, null);
 				CodeEmitter ctorIlgen = CodeEmitter.Create(cb);
 				ctorIlgen.Emit(OpCodes.Ldarg_0);
 				MethodWrapper mw = tw.GetMethodWrapper("<init>", "()V", false);
@@ -5394,11 +6441,11 @@ namespace IKVM.Internal
 				}
 			}
 
-			internal ConstructorBuilder DefineThreadLocalType()
+			internal MethodBuilder DefineThreadLocalType()
 			{
 				TypeWrapper threadLocal = ClassLoaderWrapper.LoadClassCritical("ikvm.internal.IntrinsicThreadLocal");
 				int id = nestedTypeBuilders == null ? 0 : nestedTypeBuilders.Count;
-				TypeBuilder tb = typeBuilder.DefineNestedType("__<tls>_" + id, TypeAttributes.NestedPrivate | TypeAttributes.Sealed, threadLocal.TypeAsBaseType);
+				TypeBuilder tb = typeBuilder.DefineNestedType(NestedTypeName.ThreadLocal + id, TypeAttributes.NestedPrivate | TypeAttributes.Sealed, threadLocal.TypeAsBaseType);
 				FieldBuilder fb = tb.DefineField("field", Types.Object, FieldAttributes.Private | FieldAttributes.Static);
 				fb.SetCustomAttribute(new CustomAttributeBuilder(JVM.Import(typeof(ThreadStaticAttribute)).GetConstructor(Type.EmptyTypes), new object[0]));
 				MethodBuilder mbGet = tb.DefineMethod("get", MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Final, Types.Object, Type.EmptyTypes);
@@ -5410,7 +6457,7 @@ namespace IKVM.Internal
 				ilgen.Emit(OpCodes.Ldarg_1);
 				ilgen.Emit(OpCodes.Stsfld, fb);
 				ilgen.Emit(OpCodes.Ret);
-				ConstructorBuilder cb = tb.DefineConstructor(MethodAttributes.Assembly, CallingConventions.Standard, Type.EmptyTypes);
+				MethodBuilder cb = ReflectUtil.DefineConstructor(tb, MethodAttributes.Assembly, Type.EmptyTypes);
 				CodeEmitter ctorilgen = CodeEmitter.Create(cb);
 				ctorilgen.Emit(OpCodes.Ldarg_0);
 				MethodWrapper basector = threadLocal.GetMethodWrapper("<init>", "()V", false);
@@ -5422,19 +6469,19 @@ namespace IKVM.Internal
 				return cb;
 			}
 
-			internal ConstructorBuilder GetAtomicReferenceFieldUpdater(FieldWrapper field)
+			internal MethodBuilder GetAtomicReferenceFieldUpdater(FieldWrapper field)
 			{
 				if (arfuMap == null)
 				{
-					arfuMap = new Dictionary<FieldWrapper, ConstructorBuilder>();
+					arfuMap = new Dictionary<FieldWrapper, MethodBuilder>();
 				}
-				ConstructorBuilder cb;
+				MethodBuilder cb;
 				if (!arfuMap.TryGetValue(field, out cb))
 				{
 					TypeWrapper arfuTypeWrapper = ClassLoaderWrapper.LoadClassCritical("ikvm.internal.IntrinsicAtomicReferenceFieldUpdater");
-					TypeBuilder tb = typeBuilder.DefineNestedType("__<ARFU>_" + arfuMap.Count, TypeAttributes.NestedPrivate | TypeAttributes.Sealed, arfuTypeWrapper.TypeAsBaseType);
+					TypeBuilder tb = typeBuilder.DefineNestedType(NestedTypeName.AtomicReferenceFieldUpdater + arfuMap.Count, TypeAttributes.NestedPrivate | TypeAttributes.Sealed, arfuTypeWrapper.TypeAsBaseType);
 					AtomicReferenceFieldUpdaterEmitter.EmitImpl(tb, field.GetField());
-					cb = tb.DefineConstructor(MethodAttributes.Assembly, CallingConventions.Standard, Type.EmptyTypes);
+					cb = ReflectUtil.DefineConstructor(tb, MethodAttributes.Assembly, Type.EmptyTypes);
 					arfuMap.Add(field, cb);
 					CodeEmitter ctorilgen = CodeEmitter.Create(cb);
 					ctorilgen.Emit(OpCodes.Ldarg_0);
@@ -5451,21 +6498,55 @@ namespace IKVM.Internal
 			internal TypeBuilder DefineIndyCallSiteType()
 			{
 				int id = nestedTypeBuilders == null ? 0 : nestedTypeBuilders.Count;
-				TypeBuilder tb = typeBuilder.DefineNestedType("__<>IndyCS" + id, TypeAttributes.NestedPrivate | TypeAttributes.Abstract | TypeAttributes.Sealed | TypeAttributes.BeforeFieldInit);
+				TypeBuilder tb = typeBuilder.DefineNestedType(NestedTypeName.IndyCallSite + id, TypeAttributes.NestedPrivate | TypeAttributes.Abstract | TypeAttributes.Sealed | TypeAttributes.BeforeFieldInit);
 				RegisterNestedTypeBuilder(tb);
 				return tb;
 			}
 
 			internal TypeBuilder DefineMethodHandleConstantType(int index)
 			{
-				TypeBuilder tb = typeBuilder.DefineNestedType("__<>MHC" + index, TypeAttributes.NestedPrivate | TypeAttributes.Sealed | TypeAttributes.Abstract | TypeAttributes.BeforeFieldInit); ;
+				TypeBuilder tb = typeBuilder.DefineNestedType(NestedTypeName.MethodHandleConstant + index, TypeAttributes.NestedPrivate | TypeAttributes.Sealed | TypeAttributes.Abstract | TypeAttributes.BeforeFieldInit); ;
 				RegisterNestedTypeBuilder(tb);
 				return tb;
 			}
 
+			internal TypeBuilder DefineMethodTypeConstantType(int index)
+			{
+				TypeBuilder tb = typeBuilder.DefineNestedType(NestedTypeName.MethodTypeConstant + index, TypeAttributes.NestedPrivate | TypeAttributes.Sealed | TypeAttributes.Abstract | TypeAttributes.BeforeFieldInit);
+				RegisterNestedTypeBuilder(tb);
+				return tb;
+			}
+
+			// this is used to define intrinsified anonymous classes (in the Unsafe.defineAnonymousClass() sense)
+			internal TypeBuilder DefineAnonymousClass()
+			{
+				int id = nestedTypeBuilders == null ? 0 : nestedTypeBuilders.Count;
+				TypeBuilder tb = typeBuilder.DefineNestedType(NestedTypeName.IntrinsifiedAnonymousClass + id, TypeAttributes.NestedPrivate | TypeAttributes.Sealed | TypeAttributes.SpecialName | TypeAttributes.BeforeFieldInit);
+				RegisterNestedTypeBuilder(tb);
+				return tb;
+			}
+
+			private MethodBuilder DefineHelperMethod(string name, Type returnType, Type[] parameterTypes)
+			{
+#if STATIC_COMPILER
+				// FXBUG csc.exe doesn't like non-public methods in interfaces, so for public interfaces we move
+				// the helper methods into a nested type.
+				if (wrapper.IsPublic && wrapper.IsInterface && wrapper.classLoader.WorkaroundInterfacePrivateMethods)
+				{
+					if (interfaceHelperMethodsTypeBuilder == null)
+					{
+						interfaceHelperMethodsTypeBuilder = typeBuilder.DefineNestedType(NestedTypeName.InterfaceHelperMethods, TypeAttributes.NestedPrivate | TypeAttributes.Sealed | TypeAttributes.Abstract | TypeAttributes.BeforeFieldInit);
+						RegisterNestedTypeBuilder(interfaceHelperMethodsTypeBuilder);
+					}
+					return interfaceHelperMethodsTypeBuilder.DefineMethod(name, MethodAttributes.PrivateScope | MethodAttributes.Static, returnType, parameterTypes);
+				}
+#endif
+				return typeBuilder.DefineMethod(name, MethodAttributes.PrivateScope | MethodAttributes.Static, returnType, parameterTypes);
+			}
+
 			internal MethodBuilder DefineMethodHandleDispatchStub(Type returnType, Type[] parameterTypes)
 			{
-				return typeBuilder.DefineMethod("__<>MHC", MethodAttributes.Static | MethodAttributes.PrivateScope, returnType, parameterTypes);
+				return DefineHelperMethod("__<>MHC", returnType, parameterTypes);
 			}
 
 			internal FieldBuilder DefineMethodHandleInvokeCacheField(Type fieldType)
@@ -5473,15 +6554,62 @@ namespace IKVM.Internal
 				return typeBuilder.DefineField("__<>invokeCache", fieldType, FieldAttributes.Static | FieldAttributes.PrivateScope);
 			}
 
-			internal MethodBuilder DefineInvokeSpecialStub(DefineMethodHelper sig)
+			internal FieldBuilder DefineDynamicMethodHandleCacheField()
 			{
-				return sig.DefineMethod(wrapper, typeBuilder, "__<>", MethodAttributes.PrivateScope);
+				return typeBuilder.DefineField("__<>dynamicMethodHandleCache", CoreClasses.java.lang.invoke.MethodHandle.Wrapper.TypeAsSignatureType, FieldAttributes.Static | FieldAttributes.PrivateScope);
+			}
+
+			internal FieldBuilder DefineDynamicMethodTypeCacheField()
+			{
+				return typeBuilder.DefineField("__<>dynamicMethodTypeCache", CoreClasses.java.lang.invoke.MethodType.Wrapper.TypeAsSignatureType, FieldAttributes.Static | FieldAttributes.PrivateScope);
 			}
 
 			internal MethodBuilder DefineDelegateInvokeErrorStub(Type returnType, Type[] parameterTypes)
 			{
-				return typeBuilder.DefineMethod("__<>", MethodAttributes.PrivateScope | MethodAttributes.Static, returnType, parameterTypes);
+				return DefineHelperMethod("__<>", returnType, parameterTypes);
 			}
+
+			internal MethodInfo GetInvokeSpecialStub(MethodWrapper method)
+			{
+				if (invokespecialstubcache == null)
+				{
+					invokespecialstubcache = new Dictionary<MethodKey, MethodInfo>();
+				}
+				MethodKey key = new MethodKey(method.DeclaringType.Name, method.Name, method.Signature);
+				MethodInfo mi;
+				if (!invokespecialstubcache.TryGetValue(key, out mi))
+				{
+					DefineMethodHelper dmh = method.GetDefineMethodHelper();
+					MethodBuilder stub = dmh.DefineMethod(wrapper, typeBuilder, "__<>", MethodAttributes.PrivateScope);
+					CodeEmitter ilgen = CodeEmitter.Create(stub);
+					ilgen.Emit(OpCodes.Ldarg_0);
+					for (int i = 1; i <= dmh.ParameterCount; i++)
+					{
+						ilgen.EmitLdarg(i);
+					}
+					method.EmitCall(ilgen);
+					ilgen.Emit(OpCodes.Ret);
+					ilgen.DoEmit();
+					invokespecialstubcache[key] = stub;
+					mi = stub;
+				}
+				return mi;
+			}
+
+#if !STATIC_COMPILER
+			internal void EmitLiveObjectLoad(CodeEmitter ilgen, object value)
+			{
+				if (liveObjects == null)
+				{
+					liveObjects = new List<object>();
+				}
+				FieldInfo fi = TypeBuilder.GetField(typeof(IKVM.Runtime.LiveObjectHolder<>).MakeGenericType(typeBuilder), typeof(IKVM.Runtime.LiveObjectHolder<>).GetField("values", BindingFlags.Static | BindingFlags.Public));
+				ilgen.Emit(OpCodes.Ldsfld, fi);
+				ilgen.EmitLdc_I4(liveObjects.Count);
+				ilgen.Emit(OpCodes.Ldelem_Ref);
+				liveObjects.Add(value);
+			}
+#endif
 		}
 
 		private static bool CheckRequireOverrideStub(MethodWrapper mw1, MethodWrapper mw2)
@@ -5523,30 +6651,66 @@ namespace IKVM.Internal
 		{
 			Debug.Assert(!baseMethod.HasCallerID);
 
-			MethodBuilder overrideStub = baseMethod.GetDefineMethodHelper().DefineMethod(this, typeBuilder, "__<overridestub>" + baseMethod.Name, MethodAttributes.Private | MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final);
+			MethodBuilder overrideStub = baseMethod.GetDefineMethodHelper().DefineMethod(this, typeBuilder, "__<overridestub>" + baseMethod.DeclaringType.Name + "::" + baseMethod.Name, MethodAttributes.Private | MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final);
 			typeBuilder.DefineMethodOverride(overrideStub, (MethodInfo)baseMethod.GetMethod());
 
-			Type stubret = baseMethod.ReturnTypeForDefineMethod;
-			Type[] stubargs = baseMethod.GetParametersForDefineMethod();
-			Type targetRet = targetMethod.ReturnTypeForDefineMethod;
-			Type[] targetArgs = targetMethod.GetParametersForDefineMethod();
+			TypeWrapper[] stubargs = baseMethod.GetParameters();
+			TypeWrapper[] targetArgs = targetMethod.GetParameters();
 			CodeEmitter ilgen = CodeEmitter.Create(overrideStub);
 			ilgen.Emit(OpCodes.Ldarg_0);
 			for (int i = 0; i < targetArgs.Length; i++)
 			{
 				ilgen.EmitLdarg(i + 1);
-				if (targetArgs[i] != stubargs[i])
-				{
-					ilgen.Emit(OpCodes.Castclass, targetArgs[i]);
-				}
+				ConvertStubArg(stubargs[i], targetArgs[i], ilgen);
 			}
-			ilgen.Emit(OpCodes.Callvirt, target);
-			if (targetRet != stubret)
+			if (target != null)
 			{
-				ilgen.Emit(OpCodes.Castclass, stubret);
+				ilgen.Emit(OpCodes.Callvirt, target);
 			}
+			else
+			{
+				targetMethod.EmitCallvirt(ilgen);
+			}
+			ConvertStubArg(targetMethod.ReturnType, baseMethod.ReturnType, ilgen);
 			ilgen.Emit(OpCodes.Ret);
 			ilgen.DoEmit();
+		}
+
+		private static void ConvertStubArg(TypeWrapper src, TypeWrapper dst, CodeEmitter ilgen)
+		{
+			if (src != dst)
+			{
+				if (dst.IsUnloadable)
+				{
+					if (!src.IsUnloadable && (src.IsGhost || src.IsNonPrimitiveValueType))
+					{
+						src.EmitConvSignatureTypeToStackType(ilgen);
+					}
+				}
+				else if (dst.IsGhost || dst.IsNonPrimitiveValueType)
+				{
+					dst.EmitConvStackTypeToSignatureType(ilgen, null);
+				}
+				else
+				{
+					dst.EmitCheckcast(ilgen);
+				}
+			}
+		}
+
+		private static void GetParameterNamesFromMP(ClassFile.Method m, string[] parameterNames)
+		{
+			MethodParametersEntry[] methodParameters = m.MethodParameters;
+			if (methodParameters != null)
+			{
+				for (int i = 0, count = Math.Min(parameterNames.Length, methodParameters.Length); i < count; i++)
+				{
+					if (parameterNames[i] == null)
+					{
+						parameterNames[i] = methodParameters[i].name;
+					}
+				}
+			}
 		}
 
 		protected static void GetParameterNamesFromLVT(ClassFile.Method m, string[] parameterNames)
@@ -5660,19 +6824,19 @@ namespace IKVM.Internal
 			{
 				if (parameterNames[i] == null)
 				{
-					parameterNames[i] = (string)names[i];
+					parameterNames[i] = names[i];
 				}
 			}
 		}
 
-		protected static ParameterBuilder[] GetParameterBuilders(MethodBase mb, int parameterCount, string[] parameterNames)
+		protected static ParameterBuilder[] GetParameterBuilders(MethodBuilder mb, int parameterCount, string[] parameterNames)
 		{
 			ParameterBuilder[] parameterBuilders = new ParameterBuilder[parameterCount];
 			Dictionary<string, int> clashes = null;
 			for (int i = 0; i < parameterBuilders.Length; i++)
 			{
 				string name = null;
-				if (parameterNames != null)
+				if (parameterNames != null && parameterNames[i] != null)
 				{
 					name = parameterNames[i];
 					if (Array.IndexOf(parameterNames, name, i + 1) >= 0 || (clashes != null && clashes.ContainsKey(name)))
@@ -5690,15 +6854,7 @@ namespace IKVM.Internal
 						name += clash;
 					}
 				}
-				MethodBuilder mBuilder = mb as MethodBuilder;
-				if (mBuilder != null)
-				{
-					parameterBuilders[i] = mBuilder.DefineParameter(i + 1, ParameterAttributes.None, name);
-				}
-				else
-				{
-					parameterBuilders[i] = ((ConstructorBuilder)mb).DefineParameter(i + 1, ParameterAttributes.None, name);
-				}
+				parameterBuilders[i] = mb.DefineParameter(i + 1, ParameterAttributes.None, name);
 			}
 			return parameterBuilders;
 		}
@@ -5731,15 +6887,41 @@ namespace IKVM.Internal
 		protected abstract void AddMapXmlFields(ref FieldWrapper[] fields);
 		protected abstract bool EmitMapXmlMethodPrologueAndOrBody(CodeEmitter ilgen, ClassFile f, ClassFile.Method m);
 		protected abstract void EmitMapXmlMetadata(TypeBuilder typeBuilder, ClassFile classFile, FieldWrapper[] fields, MethodWrapper[] methods);
-		protected abstract MethodBuilder DefineGhostMethod(string name, MethodAttributes attribs, MethodWrapper mw);
+		protected abstract MethodBuilder DefineGhostMethod(TypeBuilder typeBuilder, string name, MethodAttributes attribs, MethodWrapper mw);
 		protected abstract void FinishGhost(TypeBuilder typeBuilder, MethodWrapper[] methods);
 		protected abstract void FinishGhostStep2();
 		protected abstract TypeBuilder DefineGhostType(string mangledTypeName, TypeAttributes typeAttribs);
 #endif // STATIC_COMPILER
 
-		protected virtual bool IsPInvokeMethod(ClassFile.Method m)
+		private bool IsPInvokeMethod(ClassFile.Method m)
 		{
-#if CLASSGC
+#if STATIC_COMPILER
+			Dictionary<string, IKVM.Internal.MapXml.Class> mapxml = classLoader.GetMapXmlClasses();
+			if (mapxml != null)
+			{
+				IKVM.Internal.MapXml.Class clazz;
+				if (mapxml.TryGetValue(this.Name, out clazz) && clazz.Methods != null)
+				{
+					foreach (IKVM.Internal.MapXml.Method method in clazz.Methods)
+					{
+						if (method.Name == m.Name && method.Sig == m.Signature)
+						{
+							if (method.Attributes != null)
+							{
+								foreach (IKVM.Internal.MapXml.Attribute attr in method.Attributes)
+								{
+									if (StaticCompiler.GetType(classLoader, attr.Type) == JVM.Import(typeof(System.Runtime.InteropServices.DllImportAttribute)))
+									{
+										return true;
+									}
+								}
+							}
+							break;
+						}
+					}
+				}
+			}
+#elif CLASSGC
 			// TODO PInvoke is not supported in RunAndCollect assemblies,
 			if (JVM.classUnloading)
 			{
@@ -5809,6 +6991,20 @@ namespace IKVM.Internal
 			return null;
 		}
 
+		internal override MethodParametersEntry[] GetMethodParameters(MethodWrapper mw)
+		{
+			MethodWrapper[] methods = GetMethods();
+			for (int i = 0; i < methods.Length; i++)
+			{
+				if (methods[i] == mw)
+				{
+					return impl.GetMethodParameters(i);
+				}
+			}
+			Debug.Fail("Unreachable code");
+			return null;
+		}
+
 #if !STATIC_COMPILER
 		internal override string[] GetEnclosingMethod()
 		{
@@ -5822,15 +7018,12 @@ namespace IKVM.Internal
 
 		private int GetMethodBaseToken(MethodBase mb)
 		{
-			ConstructorInfo ci = mb as ConstructorInfo;
-			if (ci != null)
+			MethodBuilder mbld = mb as MethodBuilder;
+			if (mbld != null)
 			{
-				return classLoader.GetTypeWrapperFactory().ModuleBuilder.GetConstructorToken(ci).Token;
+				return mbld.GetToken().Token;
 			}
-			else
-			{
-				return classLoader.GetTypeWrapperFactory().ModuleBuilder.GetMethodToken((MethodInfo)mb).Token;
-			}
+			return mb.MetadataToken;
 		}
 
 		internal override int GetSourceLineNumber(MethodBase mb, int ilOffset)
@@ -5854,19 +7047,28 @@ namespace IKVM.Internal
 			return -1;
 		}
 
+		private object[] DecodeAnnotations(object[] definitions)
+		{
+			if (definitions == null)
+			{
+				return null;
+			}
+			java.lang.ClassLoader loader = GetClassLoader().GetJavaClassLoader();
+			List<object> annotations = new List<object>();
+			for (int i = 0; i < definitions.Length; i++)
+			{
+				object obj = JVM.NewAnnotation(loader, definitions[i]);
+				if (obj != null)
+				{
+					annotations.Add(obj);
+				}
+			}
+			return annotations.ToArray();
+		}
+
 		internal override object[] GetDeclaredAnnotations()
 		{
-			object[] annotations = impl.GetDeclaredAnnotations();
-			if (annotations != null)
-			{
-				object[] objs = new object[annotations.Length];
-				for (int i = 0; i < annotations.Length; i++)
-				{
-					objs[i] = JVM.NewAnnotation(GetClassLoader().GetJavaClassLoader(), annotations[i]);
-				}
-				return objs;
-			}
-			return null;
+			return DecodeAnnotations(impl.GetDeclaredAnnotations());
 		}
 
 		internal override object[] GetMethodAnnotations(MethodWrapper mw)
@@ -5876,17 +7078,7 @@ namespace IKVM.Internal
 			{
 				if (methods[i] == mw)
 				{
-					object[] annotations = impl.GetMethodAnnotations(i);
-					if (annotations != null)
-					{
-						object[] objs = new object[annotations.Length];
-						for (int j = 0; j < annotations.Length; j++)
-						{
-							objs[j] = JVM.NewAnnotation(GetClassLoader().GetJavaClassLoader(), annotations[j]);
-						}
-						return objs;
-					}
-					return null;
+					return DecodeAnnotations(impl.GetMethodAnnotations(i));
 				}
 			}
 			Debug.Fail("Unreachable code");
@@ -5906,11 +7098,7 @@ namespace IKVM.Internal
 						object[][] objs = new object[annotations.Length][];
 						for (int j = 0; j < annotations.Length; j++)
 						{
-							objs[j] = new object[annotations[j].Length];
-							for (int k = 0; k < annotations[j].Length; k++)
-							{
-								objs[j][k] = JVM.NewAnnotation(GetClassLoader().GetJavaClassLoader(), annotations[j][k]);
-							}
+							objs[j] = DecodeAnnotations(annotations[j]);
 						}
 						return objs;
 					}
@@ -5928,17 +7116,7 @@ namespace IKVM.Internal
 			{
 				if (fields[i] == fw)
 				{
-					object[] annotations = impl.GetFieldAnnotations(i);
-					if (annotations != null)
-					{
-						object[] objs = new object[annotations.Length];
-						for (int j = 0; j < annotations.Length; j++)
-						{
-							objs[j] = JVM.NewAnnotation(GetClassLoader().GetJavaClassLoader(), annotations[j]);
-						}
-						return objs;
-					}
-					return null;
+					return DecodeAnnotations(impl.GetFieldAnnotations(i));
 				}
 			}
 			Debug.Fail("Unreachable code");
@@ -5963,21 +7141,25 @@ namespace IKVM.Internal
 			Debug.Fail("Unreachable code");
 			return null;
 		}
+		private Type GetBaseTypeForDefineType()
+		{
+			return BaseTypeWrapper.TypeAsBaseType;
+		}
 #endif
 
+#if STATIC_COMPILER
 		protected virtual Type GetBaseTypeForDefineType()
 		{
 			return BaseTypeWrapper.TypeAsBaseType;
 		}
 
-#if STATIC_COMPILER
 		internal virtual MethodWrapper[] GetReplacedMethodsFor(MethodWrapper mw)
 		{
 			return null;
 		}
 #endif // STATIC_COMPILER
 
-		internal override ConstructorInfo GetSerializationConstructor()
+		internal override MethodBase GetSerializationConstructor()
 		{
 			return automagicSerializationCtor;
 		}
@@ -5992,7 +7174,10 @@ namespace IKVM.Internal
 			Type[] modopt = Type.EmptyTypes;
 			if (tw.IsUnloadable)
 			{
-				modopt = new Type[] { ((UnloadableTypeWrapper)tw).GetCustomModifier(context) };
+				if (((UnloadableTypeWrapper)tw).MissingType == null)
+				{
+					modopt = new Type[] { ((UnloadableTypeWrapper)tw).GetCustomModifier(context) };
+				}
 			}
 			else
 			{
@@ -6038,6 +7223,64 @@ namespace IKVM.Internal
 					&& (fw.FieldTypeWrapper.IsUnloadable || fw.FieldTypeWrapper.IsAccessibleFrom(this) || fw.FieldTypeWrapper.InternalsVisibleTo(this)));
 		}
 #endif
+
+		internal static bool RequiresDynamicReflectionCallerClass(string classFile, string method, string signature)
+		{
+			return (classFile == "java.lang.ClassLoader" && method == "getParent" && signature == "()Ljava.lang.ClassLoader;")
+				|| (classFile == "java.lang.Thread" && method == "getContextClassLoader" && signature == "()Ljava.lang.ClassLoader;")
+				|| (classFile == "java.io.ObjectStreamField" && method == "getType" && signature == "()Ljava.lang.Class;")
+				|| (classFile == "javax.sql.rowset.serial.SerialJavaObject" && method == "getFields" && signature == "()[Ljava.lang.reflect.Field;")
+				;
+		}
+
+
+		internal override object[] GetConstantPool()
+		{
+			return impl.GetConstantPool();
+		}
+
+		internal override byte[] GetRawTypeAnnotations()
+		{
+			return impl.GetRawTypeAnnotations();
+		}
+
+		internal override byte[] GetMethodRawTypeAnnotations(MethodWrapper mw)
+		{
+			return impl.GetMethodRawTypeAnnotations(Array.IndexOf(GetMethods(), mw));
+		}
+
+		internal override byte[] GetFieldRawTypeAnnotations(FieldWrapper fw)
+		{
+			return impl.GetFieldRawTypeAnnotations(Array.IndexOf(GetFields(), fw));
+		}
+
+#if !STATIC_COMPILER && !STUB_GENERATOR
+		internal override TypeWrapper Host
+		{
+			get { return impl.Host; }
+		}
+#endif
+
+		[Conditional("STATIC_COMPILER")]
+		internal void EmitLevel4Warning(HardError error, string message)
+		{
+#if STATIC_COMPILER
+			if (GetClassLoader().WarningLevelHigh)
+			{
+				switch (error)
+				{
+					case HardError.AbstractMethodError:
+						GetClassLoader().IssueMessage(Message.EmittedAbstractMethodError, this.Name, message);
+						break;
+					case HardError.IncompatibleClassChangeError:
+						GetClassLoader().IssueMessage(Message.EmittedIncompatibleClassChangeError, this.Name, message);
+						break;
+					default:
+						throw new InvalidOperationException();
+				}
+			}
+#endif
+		}
 	}
 
 	sealed class DefineMethodHelper
@@ -6056,26 +7299,42 @@ namespace IKVM.Internal
 
 		internal MethodBuilder DefineMethod(DynamicTypeWrapper context, TypeBuilder tb, string name, MethodAttributes attribs)
 		{
-			return DefineMethod(context.GetClassLoader().GetTypeWrapperFactory(), tb, name, attribs);
+			return DefineMethod(context.GetClassLoader().GetTypeWrapperFactory(), tb, name, attribs, null, false);
 		}
 
 		internal MethodBuilder DefineMethod(TypeWrapperFactory context, TypeBuilder tb, string name, MethodAttributes attribs)
 		{
+			return DefineMethod(context, tb, name, attribs, null, false);
+		}
+
+		internal MethodBuilder DefineMethod(TypeWrapperFactory context, TypeBuilder tb, string name, MethodAttributes attribs, Type firstParameter, bool mustBePublic)
+		{
 			// we add optional modifiers to make the signature unique
+			int firstParam = firstParameter == null ? 0 : 1;
 			TypeWrapper[] parameters = mw.GetParameters();
-			Type[] parameterTypes = new Type[parameters.Length + (mw.HasCallerID ? 1 : 0)];
+			Type[] parameterTypes = new Type[parameters.Length + (mw.HasCallerID ? 1 : 0) + firstParam];
 			Type[][] modopt = new Type[parameterTypes.Length][];
+			if (firstParameter != null)
+			{
+				parameterTypes[0] = firstParameter;
+				modopt[0] = Type.EmptyTypes;
+			}
 			for (int i = 0; i < parameters.Length; i++)
 			{
-				parameterTypes[i] = parameters[i].TypeAsSignatureType;
-				modopt[i] = DynamicTypeWrapper.GetModOpt(context, parameters[i], false);
+				parameterTypes[i + firstParam] = mustBePublic
+					? parameters[i].TypeAsPublicSignatureType
+					: parameters[i].TypeAsSignatureType;
+				modopt[i + firstParam] = DynamicTypeWrapper.GetModOpt(context, parameters[i], mustBePublic);
 			}
 			if (mw.HasCallerID)
 			{
 				parameterTypes[parameterTypes.Length - 1] = CoreClasses.ikvm.@internal.CallerID.Wrapper.TypeAsSignatureType;
 			}
-			Type[] modoptReturnType = DynamicTypeWrapper.GetModOpt(context, mw.ReturnType, false);
-			return tb.DefineMethod(name, attribs, CallingConventions.Standard, mw.ReturnType.TypeAsSignatureType, null, modoptReturnType, parameterTypes, null, modopt);
+			Type returnType = mustBePublic
+				? mw.ReturnType.TypeAsPublicSignatureType
+				: mw.ReturnType.TypeAsSignatureType;
+			Type[] modoptReturnType = DynamicTypeWrapper.GetModOpt(context, mw.ReturnType, mustBePublic);
+			return tb.DefineMethod(name, attribs, CallingConventions.Standard, returnType, null, modoptReturnType, parameterTypes, null, modopt);
 		}
 
 		internal MethodBuilder DefineConstructor(DynamicTypeWrapper context, TypeBuilder tb, MethodAttributes attribs)
@@ -6088,4 +7347,44 @@ namespace IKVM.Internal
 			return DefineMethod(context, tb, ConstructorInfo.ConstructorName, attribs | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName);
 		}
 	}
+
+#if !STATIC_COMPILER
+	sealed class DynamicCallerIDProvider
+	{
+		// this object acts as a capability that is passed to trusted code to allow the DynamicCallerID()
+		// method to be public without giving untrusted code the ability to forge a CallerID token
+		internal static readonly DynamicCallerIDProvider Instance = new DynamicCallerIDProvider();
+
+		private DynamicCallerIDProvider() { }
+
+		internal ikvm.@internal.CallerID GetCallerID()
+		{
+			for (int i = 0; ; )
+			{
+				MethodBase method = new StackFrame(i++, false).GetMethod();
+				if (method == null)
+				{
+#if !FIRST_PASS
+					return ikvm.@internal.CallerID.create(null, null);
+#endif
+				}
+				if (Java_sun_reflect_Reflection.IsHideFromStackWalk(method))
+				{
+					continue;
+				}
+				TypeWrapper caller = ClassLoaderWrapper.GetWrapperFromType(method.DeclaringType);
+				return CreateCallerID(caller.Host ?? caller);
+			}
+		}
+
+		internal static ikvm.@internal.CallerID CreateCallerID(TypeWrapper tw)
+		{
+#if FIRST_PASS
+			return null;
+#else
+			return ikvm.@internal.CallerID.create(tw.ClassObject, tw.GetClassLoader().GetJavaClassLoader());
+#endif
+		}
+	}
+#endif
 }

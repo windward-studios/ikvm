@@ -94,8 +94,7 @@ namespace IKVM.Reflection.Emit
 
 		public void SetCustomAttribute(CustomAttributeBuilder customBuilder)
 		{
-			Universe u = typeBuilder.ModuleBuilder.universe;
-			if (customBuilder.Constructor.DeclaringType == u.System_Runtime_CompilerServices_SpecialNameAttribute)
+			if (customBuilder.KnownCA == KnownCA.SpecialNameAttribute)
 			{
 				attributes |= PropertyAttributes.SpecialName;
 			}
@@ -275,7 +274,7 @@ namespace IKVM.Reflection.Emit
 
 		internal override int GetCurrentToken()
 		{
-			if (typeBuilder.ModuleBuilder.IsSaved && typeBuilder.ModuleBuilder.IsPseudoToken(lazyPseudoToken))
+			if (typeBuilder.ModuleBuilder.IsSaved && ModuleBuilder.IsPseudoToken(lazyPseudoToken))
 			{
 				return typeBuilder.ModuleBuilder.ResolvePseudoToken(lazyPseudoToken);
 			}

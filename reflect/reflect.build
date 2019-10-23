@@ -1,14 +1,32 @@
 <?xml version="1.0"?>
+<!--
+  Copyright (C) 2002-2013 Jeroen Frijters
+
+  This software is provided 'as-is', without any express or implied
+  warranty.  In no event will the authors be held liable for any damages
+  arising from the use of this software.
+
+  Permission is granted to anyone to use this software for any purpose,
+  including commercial applications, and to alter it and redistribute it
+  freely, subject to the following restrictions:
+
+  1. The origin of this software must not be misrepresented; you must not
+     claim that you wrote the original software. If you use this software
+     in a product, an acknowledgment in the product documentation would be
+     appreciated but is not required.
+  2. Altered source versions must be plainly marked as such, and must not be
+     misrepresented as being the original software.
+  3. This notice may not be removed or altered from any source distribution.
+
+  Jeroen Frijters
+  jeroen@frijters.net
+  
+-->
 <project name="reflect" default="IKVM.Reflection">
-    <property name="debugoption" value="None" />
-    <if test="${property::exists('debug') and debug}">
-        <property name="debugoption" value="Enable" />
-    </if>
-    <target name="IKVM.Reflection">
+    <include buildfile="../ikvm.include" />
+
+    <target name="properties">
         <property name="defs" value="TRACE" />
-        <if test="${property::exists('debug') and debug}">
-            <property name="defs" value="${defs};DEBUG" />
-        </if>
         <if test="${framework::exists('mono-2.0')}">
             <property name="defs" value="${defs};MONO" />
         </if>
@@ -23,7 +41,21 @@
         <if test="${framework::exists('mono-2.0')}">
             <property name="MonoSymbolWriter" value="${path::combine(framework::get-assembly-directory('mono-2.0'), 'Mono.CompilerServices.SymbolWriter.dll')}" />
         </if>
-        <csc target="library" output="../bin/IKVM.Reflection.dll" optimize="true" define="${defs}" debug="${debugoption}">
+    </target>
+
+    <target name="CoreCLR" depends="properties">
+        <property name="CoreCLR" value="true" />
+        <property name="defs" value="${defs};CORECLR;NO_SYMBOL_WRITER;NO_AUTHENTICODE" />
+        <call target="compile" />
+    </target>
+
+    <target name="IKVM.Reflection" depends="properties">
+        <property name="CoreCLR" value="false" />
+        <call target="compile" />
+    </target>
+
+    <target name="compile">
+        <csc target="library" output="../bin/IKVM.Reflection.dll" optimize="true" define="${defs}" noconfig="true" nostdlib="true">
             <sources>
                 <include name="../CommonAssemblyInfo.cs" />
                 <include name="AmbiguousMatchException.cs" />
@@ -32,6 +64,7 @@
                 <include name="BadImageFormatException.cs" />
                 <include name="Binder.cs" />
                 <include name="ConstructorInfo.cs" />
+                <include name="coreclr.cs" />
                 <include name="CustomAttributeData.cs" />
                 <include name="CustomAttributeNamedArgument.cs" />
                 <include name="CustomAttributeTypedArgument.cs" />
@@ -57,12 +90,14 @@
                 <include name="Module.cs" />
                 <include name="ParameterInfo.cs" />
                 <include name="ParameterModifier.cs" />
+                <include name="Projection.cs" />
                 <include name="PropertyInfo.cs" />
                 <include name="PropertySignature.cs" />
                 <include name="Signature.cs" />
                 <include name="StandAloneMethodSig.cs" />
                 <include name="StrongNameKeyPair.cs" />
                 <include name="Type.cs" />
+                <include name="TypeInfo.cs" />
                 <include name="TypeNameParser.cs" />
                 <include name="Universe.cs" />
                 <include name="Util.cs" />
@@ -72,6 +107,7 @@
                 <include name="Emit\CustomModifiersBuilder.cs" />
                 <include name="Emit\EnumBuilder.cs" />
                 <include name="Emit\Enums.cs" />
+                <include name="Emit\ExceptionHandler.cs" />
                 <include name="Emit\EventBuilder.cs" />
                 <include name="Emit\FieldBuilder.cs" />
                 <include name="Emit\ILGenerator.cs" />
@@ -86,13 +122,14 @@
                 <include name="Emit\TypeBuilder.cs" />
                 <include name="Impl\ITypeOwner.cs" />
                 <include name="Impl\MdbWriter.cs" />
-                <include name="Impl\PdbWriter.cs" />
+                <include name="Impl\PdbWriter.cs" unless="${CoreCLR}" />
                 <include name="Impl\SymbolSupport.cs" />
                 <include name="Metadata\CliHeader.cs" />
                 <include name="Metadata\MetadataRW.cs" />
                 <include name="Metadata\Tables.cs" />
                 <include name="Properties\AssemblyInfo.cs" />
                 <include name="Reader\AssemblyReader.cs" />
+                <include name="Reader\Authenticode.cs" />
                 <include name="Reader\ByteReader.cs" />
                 <include name="Reader\EventInfoImpl.cs" />
                 <include name="Reader\Field.cs" />
@@ -115,6 +152,9 @@
             </sources>
             <references>
                 <include if="${framework::exists('mono-2.0')}" name="${MonoSymbolWriter}" />
+                <include name="${ReferencePath}/mscorlib.dll" />
+                <include name="${ReferencePath}/System.dll" unless="${CoreCLR}" />
+                <include name="${ReferencePath}/System.Security.dll" unless="${CoreCLR}" />
             </references>
         </csc>
     </target>

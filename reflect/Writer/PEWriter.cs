@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2008 Jeroen Frijters
+  Copyright (C) 2008-2013 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -124,6 +124,17 @@ namespace IKVM.Reflection.Writer
 		{
 			return (p + (Headers.OptionalHeader.SectionAlignment - 1)) & ~(Headers.OptionalHeader.SectionAlignment - 1);
 		}
+
+		internal bool Is32Bit
+		{
+			get { return (Headers.FileHeader.Characteristics & IMAGE_FILE_HEADER.IMAGE_FILE_32BIT_MACHINE) != 0; }
+		}
+
+		internal uint Thumb
+		{
+			// On ARM we need to set the least significant bit of the program counter to select the Thumb instruction set
+			get { return Headers.FileHeader.Machine == IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_ARM ? 1u : 0u; }
+		}
 	}
 
 	sealed class IMAGE_NT_HEADERS
@@ -147,7 +158,7 @@ namespace IKVM.Reflection.Writer
 
 		public WORD Machine;
 		public WORD NumberOfSections;
-		public DWORD TimeDateStamp = (uint)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+		public DWORD TimeDateStamp;
 		public DWORD PointerToSymbolTable = 0;
 		public DWORD NumberOfSymbols = 0;
 		public WORD SizeOfOptionalHeader = 0xE0;
@@ -230,33 +241,15 @@ namespace IKVM.Reflection.Writer
 			if (Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
 			{
 				bw.Write((DWORD)SizeOfStackReserve);
-			}
-			else
-			{
-				bw.Write(SizeOfStackReserve);
-			}
-			if (Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
-			{
 				bw.Write((DWORD)SizeOfStackCommit);
-			}
-			else
-			{
-				bw.Write(SizeOfStackCommit);
-			}
-			if (Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
-			{
 				bw.Write((DWORD)SizeOfHeapReserve);
-			}
-			else
-			{
-				bw.Write(SizeOfHeapReserve);
-			}
-			if (Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
-			{
 				bw.Write((DWORD)SizeOfHeapCommit);
 			}
 			else
 			{
+				bw.Write(SizeOfStackReserve);
+				bw.Write(SizeOfStackCommit);
+				bw.Write(SizeOfHeapReserve);
 				bw.Write(SizeOfHeapCommit);
 			}
 			bw.Write(LoaderFlags);

@@ -34,7 +34,7 @@ static class Java_sun_nio_ch_DatagramChannelImpl
 	{
 	}
 
-	public static void disconnect0(FileDescriptor fd)
+	public static void disconnect0(FileDescriptor fd, bool isIPv6)
 	{
 #if !FIRST_PASS
 		try
@@ -120,15 +120,14 @@ static class Java_sun_nio_ch_DatagramChannelImpl
 #endif
 	}
 
-	public static int send0(object obj, bool preferIPv6, FileDescriptor fd, byte[] buf, int pos, int len, object sa)
+	public static int send0(object obj, bool preferIPv6, FileDescriptor fd, byte[] buf, int pos, int len, InetAddress addr, int port)
 	{
 #if FIRST_PASS
 		return 0;
 #else
-		java.net.InetSocketAddress addr = (java.net.InetSocketAddress)sa;
 		try
 		{
-			return fd.getSocket().SendTo(buf, pos, len, System.Net.Sockets.SocketFlags.None, new System.Net.IPEndPoint(java.net.SocketUtil.getAddressFromInetAddress(addr.getAddress(), preferIPv6), addr.getPort()));
+			return fd.getSocket().SendTo(buf, pos, len, System.Net.Sockets.SocketFlags.None, new System.Net.IPEndPoint(java.net.SocketUtil.getAddressFromInetAddress(addr, preferIPv6), port));
 		}
 		catch (System.Net.Sockets.SocketException x)
 		{
@@ -409,7 +408,14 @@ namespace IKVM.NativeCode.sun.nio.ch
 			}
 			catch (System.Net.Sockets.SocketException x)
 			{
-				throw global::java.net.SocketUtil.convertSocketExceptionToIOException(x);
+				if (x.ErrorCode == global::java.net.SocketUtil.WSAEWOULDBLOCK)
+				{
+					count = 0;
+				}
+				else
+				{
+					throw global::java.net.SocketUtil.convertSocketExceptionToIOException(x);
+				}
 			}
 			catch (ObjectDisposedException)
 			{
@@ -469,7 +475,14 @@ namespace IKVM.NativeCode.sun.nio.ch
 			}
 			catch (System.Net.Sockets.SocketException x)
 			{
-				throw global::java.net.SocketUtil.convertSocketExceptionToIOException(x);
+				if (x.ErrorCode == global::java.net.SocketUtil.WSAEWOULDBLOCK)
+				{
+					count = 0;
+				}
+				else
+				{
+					throw global::java.net.SocketUtil.convertSocketExceptionToIOException(x);
+				}
 			}
 			catch (ObjectDisposedException)
 			{
@@ -505,6 +518,13 @@ namespace IKVM.NativeCode.sun.nio.ch
 				&& System.Net.Sockets.Socket.OSSupportsIPv6
 				&& Environment.OSVersion.Platform == PlatformID.Win32NT
 				&& Environment.OSVersion.Version.Major >= 6;
+		}
+
+		public static int isExclusiveBindAvailable()
+		{
+			return Environment.OSVersion.Platform == PlatformID.Win32NT
+				? Environment.OSVersion.Version.Major >= 6 ? 1 : 0
+				: -1;
 		}
 
 		public static bool canIPv6SocketJoinIPv4Group0()
@@ -626,6 +646,10 @@ namespace IKVM.NativeCode.sun.nio.ch
 #if FIRST_PASS
 			return 0;
 #else
+			if (level == global::ikvm.@internal.Winsock.IPPROTO_IPV6 && opt == global::ikvm.@internal.Winsock.IPV6_TCLASS)
+			{
+				return 0;
+			}
 			System.Net.Sockets.SocketOptionLevel sol = (System.Net.Sockets.SocketOptionLevel)level;
 			System.Net.Sockets.SocketOptionName son = (System.Net.Sockets.SocketOptionName)opt;
 			try
@@ -658,9 +682,13 @@ namespace IKVM.NativeCode.sun.nio.ch
 #endif
 		}
 
-		public static void setIntOption0(FileDescriptor fd, bool mayNeedConversion, int level, int opt, int arg)
+		public static void setIntOption0(FileDescriptor fd, bool mayNeedConversion, int level, int opt, int arg, bool isIPv6)
 		{
 #if !FIRST_PASS
+			if (level == global::ikvm.@internal.Winsock.IPPROTO_IPV6 && opt == global::ikvm.@internal.Winsock.IPV6_TCLASS)
+			{
+				return;
+			}
 			System.Net.Sockets.SocketOptionLevel sol = (System.Net.Sockets.SocketOptionLevel)level;
 			System.Net.Sockets.SocketOptionName son = (System.Net.Sockets.SocketOptionName)opt;
 			if (mayNeedConversion)
@@ -971,11 +999,15 @@ namespace IKVM.NativeCode.sun.nio.ch
 #endif
 		}
 
-		public static void bind0(bool preferIPv6, FileDescriptor fd, InetAddress addr, int port)
+		public static void bind0(FileDescriptor fd, bool preferIPv6, bool useExclBind, InetAddress addr, int port)
 		{
 #if !FIRST_PASS
 			try
 			{
+				if (useExclBind)
+				{
+					global::java.net.net_util_md.setExclusiveBind(fd.getSocket());
+				}
 				fd.getSocket().Bind(new System.Net.IPEndPoint(global::java.net.SocketUtil.getAddressFromInetAddress(addr, preferIPv6), port));
 			}
 			catch (System.Net.Sockets.SocketException x)
@@ -1051,6 +1083,44 @@ namespace IKVM.NativeCode.sun.nio.ch
 			{
 				throw new global::java.net.SocketException("Socket is closed");
 			}
+#endif
+		}
+
+		public static int poll(FileDescriptor fd, int events, long timeout)
+		{
+#if FIRST_PASS
+			return 0;
+#else
+			System.Net.Sockets.SelectMode selectMode;
+			switch (events)
+			{
+				case global::sun.nio.ch.Net.POLLCONN:
+				case global::sun.nio.ch.Net.POLLOUT:
+					selectMode = System.Net.Sockets.SelectMode.SelectWrite;
+					break;
+				case global::sun.nio.ch.Net.POLLIN:
+					selectMode = System.Net.Sockets.SelectMode.SelectRead;
+					break;
+				default:
+					throw new NotSupportedException();
+			}
+			int microSeconds = timeout >= Int32.MaxValue / 1000 ? Int32.MaxValue : (int)(timeout * 1000);
+			try
+			{
+				if (fd.getSocket().Poll(microSeconds, selectMode))
+				{
+					return events;
+				}
+			}
+			catch (System.Net.Sockets.SocketException x)
+			{
+				throw new global::java.net.SocketException(x.Message);
+			}
+			catch (System.ObjectDisposedException)
+			{
+				throw new global::java.net.SocketException("Socket is closed");
+			}
+			return 0;
 #endif
 		}
 	}

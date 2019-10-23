@@ -29,7 +29,7 @@ using IKVM.Reflection.Metadata;
 
 namespace IKVM.Reflection.Reader
 {
-	sealed class TypeDefImpl : Type
+	sealed class TypeDefImpl : TypeInfo
 	{
 		private readonly ModuleReader module;
 		private readonly int index;
@@ -41,9 +41,10 @@ namespace IKVM.Reflection.Reader
 		{
 			this.module = module;
 			this.index = index;
-			this.typeName = module.GetString(module.TypeDef.records[index].TypeName);
+			// empty typeName is not allowed, but obfuscators...
+			this.typeName = module.GetString(module.TypeDef.records[index].TypeName) ?? "";
 			this.typeNamespace = module.GetString(module.TypeDef.records[index].TypeNamespace);
-			MarkEnumOrValueType(typeNamespace, typeName);
+			MarkKnownType(typeNamespace, typeName);
 		}
 
 		public override Type BaseType
@@ -218,14 +219,9 @@ namespace IKVM.Reflection.Reader
 			return Empty<PropertyInfo>.Array;
 		}
 
-		public override string __Name
+		internal override TypeName TypeName
 		{
-			get { return typeName; }
-		}
-
-		public override string __Namespace
-		{
-			get { return typeNamespace; }
+			get { return new TypeName(typeNamespace, typeName); }
 		}
 
 		public override string Name
@@ -265,7 +261,7 @@ namespace IKVM.Reflection.Reader
 					int len = module.GenericParam.records.Length;
 					for (int i = first; i < len && module.GenericParam.records[i].Owner == token; i++)
 					{
-						list.Add(new GenericTypeParameter(module, i));
+						list.Add(new GenericTypeParameter(module, i, Signature.ELEMENT_TYPE_VAR));
 					}
 					typeArgs = list.ToArray();
 				}
@@ -291,7 +287,16 @@ namespace IKVM.Reflection.Reader
 
 		public override bool IsGenericTypeDefinition
 		{
-			get { return module.GenericParam.FindFirstByOwner(this.MetadataToken) != -1; }
+			get
+			{
+				if ((typeFlags & (TypeFlags.IsGenericTypeDefinition | TypeFlags.NotGenericTypeDefinition)) == 0)
+				{
+					typeFlags |= module.GenericParam.FindFirstByOwner(this.MetadataToken) == -1
+						? TypeFlags.NotGenericTypeDefinition
+						: TypeFlags.IsGenericTypeDefinition;
+				}
+				return (typeFlags & TypeFlags.IsGenericTypeDefinition) != 0;
+			}
 		}
 
 		public override Type GetGenericTypeDefinition()
@@ -339,49 +344,6 @@ namespace IKVM.Reflection.Reader
 					return module.ResolveType(module.NestedClass.records[i].EnclosingClass, null, null);
 				}
 				throw new InvalidOperationException();
-			}
-		}
-
-		public override StructLayoutAttribute StructLayoutAttribute
-		{
-			get
-			{
-				StructLayoutAttribute layout;
-				switch (this.Attributes & TypeAttributes.LayoutMask)
-				{
-					case TypeAttributes.AutoLayout:
-						layout = new StructLayoutAttribute(LayoutKind.Auto);
-						break;
-					case TypeAttributes.SequentialLayout:
-						layout = new StructLayoutAttribute(LayoutKind.Sequential);
-						break;
-					case TypeAttributes.ExplicitLayout:
-						layout = new StructLayoutAttribute(LayoutKind.Explicit);
-						break;
-					default:
-						throw new BadImageFormatException();
-				}
-				switch (this.Attributes & TypeAttributes.StringFormatMask)
-				{
-					case TypeAttributes.AnsiClass:
-						layout.CharSet = CharSet.Ansi;
-						break;
-					case TypeAttributes.UnicodeClass:
-						layout.CharSet = CharSet.Unicode;
-						break;
-					case TypeAttributes.AutoClass:
-						layout.CharSet = CharSet.Auto;
-						break;
-					default:
-						layout.CharSet = CharSet.None;
-						break;
-				}
-				if (!__GetLayout(out layout.Pack, out layout.Size))
-				{
-					// compatibility with System.Reflection
-					layout.Pack = 8;
-				}
-				return layout;
 			}
 		}
 

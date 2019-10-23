@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2009-2012 Jeroen Frijters
+  Copyright (C) 2009-2015 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -46,12 +46,15 @@ namespace IKVM.Reflection
 		public static readonly Type[] EmptyTypes = Empty<Type>.Array;
 		protected readonly Type underlyingType;
 		protected TypeFlags typeFlags;
+		private byte sigElementType;	// only used if (__IsBuiltIn || HasElementType || __IsFunctionPointer || IsGenericParameter)
 
 		[Flags]
-		protected enum TypeFlags
+		protected enum TypeFlags : ushort
 		{
-			// for use by TypeBuilder
+			// for use by TypeBuilder or TypeDefImpl
 			IsGenericTypeDefinition = 1,
+
+			// for use by TypeBuilder
 			HasNestedTypes = 2,
 			Baked = 4,
 
@@ -59,9 +62,23 @@ namespace IKVM.Reflection
 			ValueType = 8,
 			NotValueType = 16,
 
-			// for use by TypeDef, TypeBuilder or MissingType
+			// for use by TypeDefImpl, TypeBuilder or MissingType
 			PotentialEnumOrValueType = 32,
 			EnumOrValueType = 64,
+
+			// for use by TypeDefImpl
+			NotGenericTypeDefinition = 128,
+
+			// used to cache __ContainsMissingType
+			ContainsMissingType_Unknown = 0,
+			ContainsMissingType_Pending = 256,
+			ContainsMissingType_Yes = 512,
+			ContainsMissingType_No = 256 | 512,
+			ContainsMissingType_Mask = 256 | 512,
+
+			// built-in type support
+			PotentialBuiltIn = 1024,
+			BuiltIn = 2048,
 		}
 
 		// prevent subclassing by outsiders
@@ -75,6 +92,12 @@ namespace IKVM.Reflection
 			System.Diagnostics.Debug.Assert(underlyingType.underlyingType == underlyingType);
 			this.underlyingType = underlyingType;
 			this.typeFlags = underlyingType.typeFlags;
+		}
+
+		internal Type(byte sigElementType)
+			: this()
+		{
+			this.sigElementType = sigElementType;
 		}
 
 		public static Binder DefaultBinder
@@ -169,34 +192,34 @@ namespace IKVM.Reflection
 			get { throw new InvalidOperationException(); }
 		}
 
-		public virtual bool HasElementType
+		public bool HasElementType
 		{
-			get { return false; }
+			get { return IsArray || IsByRef || IsPointer; }
 		}
 
-		public virtual bool IsArray
+		public bool IsArray
 		{
-			get { return false; }
+			get { return sigElementType == Signature.ELEMENT_TYPE_ARRAY || sigElementType == Signature.ELEMENT_TYPE_SZARRAY; }
 		}
 
-		public virtual bool __IsVector
+		public bool __IsVector
 		{
-			get { return false; }
+			get { return sigElementType == Signature.ELEMENT_TYPE_SZARRAY; }
 		}
 
-		public virtual bool IsByRef
+		public bool IsByRef
 		{
-			get { return false; }
+			get { return sigElementType == Signature.ELEMENT_TYPE_BYREF; }
 		}
 
-		public virtual bool IsPointer
+		public bool IsPointer
 		{
-			get { return false; }
+			get { return sigElementType == Signature.ELEMENT_TYPE_PTR; }
 		}
 
-		public virtual bool __IsFunctionPointer
+		public bool __IsFunctionPointer
 		{
-			get { return false; }
+			get { return sigElementType == Signature.ELEMENT_TYPE_FNPTR; }
 		}
 
 		public virtual bool IsValueType
@@ -210,9 +233,9 @@ namespace IKVM.Reflection
 			}
 		}
 
-		public virtual bool IsGenericParameter
+		public bool IsGenericParameter
 		{
-			get { return false; }
+			get { return sigElementType == Signature.ELEMENT_TYPE_VAR || sigElementType == Signature.ELEMENT_TYPE_MVAR; }
 		}
 
 		public virtual int GenericParameterPosition
@@ -235,14 +258,19 @@ namespace IKVM.Reflection
 			get { return null; }
 		}
 
-		public virtual string __Name
+		internal virtual TypeName TypeName
 		{
 			get { throw new InvalidOperationException(); }
 		}
 
-		public virtual string __Namespace
+		public string __Name
 		{
-			get { throw new InvalidOperationException(); }
+			get { return TypeName.Name; }
+		}
+
+		public string __Namespace
+		{
+			get { return TypeName.Namespace; }
 		}
 
 		public abstract override string Name
@@ -297,6 +325,11 @@ namespace IKVM.Reflection
 			return ReferenceEquals(type, this) ? base.GetHashCode() : type.GetHashCode();
 		}
 
+		public Type[] GenericTypeArguments
+		{
+			get { return IsConstructedGenericType ? GetGenericArguments() : Type.EmptyTypes; }
+		}
+
 		public virtual Type[] GetGenericArguments()
 		{
 			return Type.EmptyTypes;
@@ -336,9 +369,47 @@ namespace IKVM.Reflection
 			throw new InvalidOperationException();
 		}
 
-		public virtual StructLayoutAttribute StructLayoutAttribute
+		public StructLayoutAttribute StructLayoutAttribute
 		{
-			get { return null; }
+			get
+			{
+				StructLayoutAttribute layout;
+				switch (this.Attributes & TypeAttributes.LayoutMask)
+				{
+					case TypeAttributes.AutoLayout:
+						layout = new StructLayoutAttribute(LayoutKind.Auto);
+						break;
+					case TypeAttributes.SequentialLayout:
+						layout = new StructLayoutAttribute(LayoutKind.Sequential);
+						break;
+					case TypeAttributes.ExplicitLayout:
+						layout = new StructLayoutAttribute(LayoutKind.Explicit);
+						break;
+					default:
+						throw new BadImageFormatException();
+				}
+				switch (this.Attributes & TypeAttributes.StringFormatMask)
+				{
+					case TypeAttributes.AnsiClass:
+						layout.CharSet = CharSet.Ansi;
+						break;
+					case TypeAttributes.UnicodeClass:
+						layout.CharSet = CharSet.Unicode;
+						break;
+					case TypeAttributes.AutoClass:
+						layout.CharSet = CharSet.Auto;
+						break;
+					default:
+						layout.CharSet = CharSet.None;
+						break;
+				}
+				if (!__GetLayout(out layout.Pack, out layout.Size))
+				{
+					// compatibility with System.Reflection
+					layout.Pack = 8;
+				}
+				return layout;
+			}
 		}
 
 		public virtual bool __GetLayout(out int packingSize, out int typeSize)
@@ -388,6 +459,11 @@ namespace IKVM.Reflection
 			throw new InvalidOperationException();
 		}
 
+		public virtual CustomModifiers[] __GetGenericParameterConstraintCustomModifiers()
+		{
+			throw new InvalidOperationException();
+		}
+
 		public virtual GenericParameterAttributes GenericParameterAttributes
 		{
 			get { throw new InvalidOperationException(); }
@@ -430,6 +506,89 @@ namespace IKVM.Reflection
 				}
 			}
 			throw new InvalidOperationException();
+		}
+
+		public string[] GetEnumNames()
+		{
+			if (!IsEnum)
+			{
+				throw new ArgumentException();
+			}
+			List<string> names = new List<string>();
+			foreach (FieldInfo field in __GetDeclaredFields())
+			{
+				if (field.IsLiteral)
+				{
+					names.Add(field.Name);
+				}
+			}
+			return names.ToArray();
+		}
+
+#if !CORECLR
+		public string GetEnumName(object value)
+		{
+			if (!IsEnum)
+			{
+				throw new ArgumentException();
+			}
+			if (value == null)
+			{
+				throw new ArgumentNullException();
+			}
+			try
+			{
+				value = Convert.ChangeType(value, GetTypeCode(GetEnumUnderlyingType()));
+			}
+			catch (FormatException)
+			{
+				throw new ArgumentException();
+			}
+			catch (OverflowException)
+			{
+				return null;
+			}
+			catch (InvalidCastException)
+			{
+				return null;
+			}
+			foreach (FieldInfo field in __GetDeclaredFields())
+			{
+				if (field.IsLiteral && field.GetRawConstantValue().Equals(value))
+				{
+					return field.Name;
+				}
+			}
+			return null;
+		}
+#endif
+
+		public bool IsEnumDefined(object value)
+		{
+			if (value is string)
+			{
+				return Array.IndexOf(GetEnumNames(), value) != -1;
+			}
+			if (!IsEnum)
+			{
+				throw new ArgumentException();
+			}
+			if (value == null)
+			{
+				throw new ArgumentNullException();
+			}
+			if (System.Type.GetTypeCode(value.GetType()) != GetTypeCode(GetEnumUnderlyingType()))
+			{
+				throw new ArgumentException();
+			}
+			foreach (FieldInfo field in __GetDeclaredFields())
+			{
+				if (field.IsLiteral && field.GetRawConstantValue().Equals(value))
+				{
+					return true;
+				}
+			}
+			return false;
 		}
 
 		public override string ToString()
@@ -916,9 +1075,9 @@ namespace IKVM.Reflection
 			return GetConstructor(bindingAttr, binder, types, modifiers);
 		}
 
-		internal Type ResolveNestedType(TypeName typeName)
+		internal Type ResolveNestedType(Module requester, TypeName typeName)
 		{
-			return FindNestedType(typeName) ?? Module.universe.GetMissingTypeOrThrow(Module, this, typeName);
+			return FindNestedType(typeName) ?? Module.universe.GetMissingTypeOrThrow(requester, Module, this, typeName);
 		}
 
 		// unlike the public API, this takes the namespace and name into account
@@ -926,7 +1085,7 @@ namespace IKVM.Reflection
 		{
 			foreach (Type type in __GetDeclaredTypes())
 			{
-				if (type.__Namespace == name.Namespace && type.__Name == name.Name)
+				if (type.TypeName == name)
 				{
 					return type;
 				}
@@ -938,7 +1097,7 @@ namespace IKVM.Reflection
 		{
 			foreach (Type type in __GetDeclaredTypes())
 			{
-				if (new TypeName(type.__Namespace, type.__Name).ToLowerInvariant() == lowerCaseName)
+				if (type.TypeName.ToLowerInvariant() == lowerCaseName)
 				{
 					return type;
 				}
@@ -1084,23 +1243,89 @@ namespace IKVM.Reflection
 		{
 			get
 			{
-				Universe u = this.Universe;
-				return this == u.System_Boolean
-					|| this == u.System_Byte
-					|| this == u.System_SByte
-					|| this == u.System_Int16
-					|| this == u.System_UInt16
-					|| this == u.System_Int32
-					|| this == u.System_UInt32
-					|| this == u.System_Int64
-					|| this == u.System_UInt64
-					|| this == u.System_IntPtr
-					|| this == u.System_UIntPtr
-					|| this == u.System_Char
-					|| this == u.System_Double
-					|| this == u.System_Single
-					;
+				return __IsBuiltIn
+					&& ((sigElementType >= Signature.ELEMENT_TYPE_BOOLEAN && sigElementType <= Signature.ELEMENT_TYPE_R8)
+						|| sigElementType == Signature.ELEMENT_TYPE_I
+						|| sigElementType == Signature.ELEMENT_TYPE_U);
 			}
+		}
+
+		public bool __IsBuiltIn
+		{
+			get
+			{
+				return (typeFlags & (TypeFlags.BuiltIn | TypeFlags.PotentialBuiltIn)) != 0
+					&& ((typeFlags & TypeFlags.BuiltIn) != 0 || ResolvePotentialBuiltInType());
+			}
+		}
+
+		internal byte SigElementType
+		{
+			get
+			{
+				// this property can only be called after __IsBuiltIn, HasElementType, __IsFunctionPointer or IsGenericParameter returned true
+				System.Diagnostics.Debug.Assert((typeFlags & TypeFlags.BuiltIn) != 0 || HasElementType || __IsFunctionPointer || IsGenericParameter);
+				return sigElementType;
+			}
+		}
+
+		private bool ResolvePotentialBuiltInType()
+		{
+			// [ECMA 335] 8.2.2 Built-in value and reference types
+			typeFlags &= ~TypeFlags.PotentialBuiltIn;
+			Universe u = this.Universe;
+			switch (__Name)
+			{
+				case "Boolean":
+					return ResolvePotentialBuiltInType(u.System_Boolean, Signature.ELEMENT_TYPE_BOOLEAN);
+				case "Char":
+					return ResolvePotentialBuiltInType(u.System_Char, Signature.ELEMENT_TYPE_CHAR);
+				case "Object":
+					return ResolvePotentialBuiltInType(u.System_Object, Signature.ELEMENT_TYPE_OBJECT);
+				case "String":
+					return ResolvePotentialBuiltInType(u.System_String, Signature.ELEMENT_TYPE_STRING);
+				case "Single":
+					return ResolvePotentialBuiltInType(u.System_Single, Signature.ELEMENT_TYPE_R4);
+				case "Double":
+					return ResolvePotentialBuiltInType(u.System_Double, Signature.ELEMENT_TYPE_R8);
+				case "SByte":
+					return ResolvePotentialBuiltInType(u.System_SByte, Signature.ELEMENT_TYPE_I1);
+				case "Int16":
+					return ResolvePotentialBuiltInType(u.System_Int16, Signature.ELEMENT_TYPE_I2);
+				case "Int32":
+					return ResolvePotentialBuiltInType(u.System_Int32, Signature.ELEMENT_TYPE_I4);
+				case "Int64":
+					return ResolvePotentialBuiltInType(u.System_Int64, Signature.ELEMENT_TYPE_I8);
+				case "IntPtr":
+					return ResolvePotentialBuiltInType(u.System_IntPtr, Signature.ELEMENT_TYPE_I);
+				case "UIntPtr":
+					return ResolvePotentialBuiltInType(u.System_UIntPtr, Signature.ELEMENT_TYPE_U);
+				case "TypedReference":
+					return ResolvePotentialBuiltInType(u.System_TypedReference, Signature.ELEMENT_TYPE_TYPEDBYREF);
+				case "Byte":
+					return ResolvePotentialBuiltInType(u.System_Byte, Signature.ELEMENT_TYPE_U1);
+				case "UInt16":
+					return ResolvePotentialBuiltInType(u.System_UInt16, Signature.ELEMENT_TYPE_U2);
+				case "UInt32":
+					return ResolvePotentialBuiltInType(u.System_UInt32, Signature.ELEMENT_TYPE_U4);
+				case "UInt64":
+					return ResolvePotentialBuiltInType(u.System_UInt64, Signature.ELEMENT_TYPE_U8);
+				case "Void":	// [LAMESPEC] missing from ECMA list for some reason
+					return ResolvePotentialBuiltInType(u.System_Void, Signature.ELEMENT_TYPE_VOID);
+				default:
+					throw new InvalidOperationException();
+			}
+		}
+
+		private bool ResolvePotentialBuiltInType(Type builtIn, byte elementType)
+		{
+			if (this == builtIn)
+			{
+				typeFlags |= TypeFlags.BuiltIn;
+				this.sigElementType = elementType;
+				return true;
+			}
+			return false;
 		}
 
 		public bool IsEnum
@@ -1179,6 +1404,7 @@ namespace IKVM.Reflection
 			get { return IsClass && IsImport; }
 		}
 
+#if !CORECLR
 		public bool IsContextful
 		{
 			get { return IsSubclassOf(this.Module.universe.Import(typeof(ContextBoundObject))); }
@@ -1188,6 +1414,7 @@ namespace IKVM.Reflection
 		{
 			get { return IsSubclassOf(this.Module.universe.Import(typeof(MarshalByRefObject))); }
 		}
+#endif
 
 		public virtual bool IsVisible
 		{
@@ -1251,22 +1478,44 @@ namespace IKVM.Reflection
 			get { return this.DeclaringType != null; }
 		}
 
-		public virtual bool __ContainsMissingType
+		public bool __ContainsMissingType
 		{
 			get
 			{
-				if (this.__IsMissing)
+				if ((typeFlags & TypeFlags.ContainsMissingType_Mask) == TypeFlags.ContainsMissingType_Unknown)
+				{
+					// Generic parameter constraints can refer back to the type parameter they are part of,
+					// so to prevent infinite recursion, we set the Pending flag during computation.
+					typeFlags |= TypeFlags.ContainsMissingType_Pending;
+					typeFlags = (typeFlags & ~TypeFlags.ContainsMissingType_Mask) | (ContainsMissingTypeImpl ? TypeFlags.ContainsMissingType_Yes : TypeFlags.ContainsMissingType_No);
+				}
+				return (typeFlags & TypeFlags.ContainsMissingType_Mask) == TypeFlags.ContainsMissingType_Yes;
+			}
+		}
+
+		internal static bool ContainsMissingType(Type[] types)
+		{
+			if (types == null)
+			{
+				return false;
+			}
+			foreach (Type type in types)
+			{
+				if (type.__ContainsMissingType)
 				{
 					return true;
 				}
-				foreach (Type arg in this.GetGenericArguments())
-				{
-					if (arg.__ContainsMissingType)
-					{
-						return true;
-					}
-				}
-				return false;
+			}
+			return false;
+		}
+
+		protected virtual bool ContainsMissingTypeImpl
+		{
+			get
+			{
+				return __IsMissing
+					|| ContainsMissingType(GetGenericArguments())
+					|| __GetCustomModifiers().ContainsMissingType;
 			}
 		}
 
@@ -1643,48 +1892,90 @@ namespace IKVM.Reflection
 		public InterfaceMapping GetInterfaceMap(Type interfaceType)
 		{
 			CheckBaked();
-			InterfaceMapping map = new InterfaceMapping();
-			if (!IsDirectlyImplementedInterface(interfaceType))
+			InterfaceMapping map;
+			map.InterfaceMethods = interfaceType.GetMethods(BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Public);
+			map.InterfaceType = interfaceType;
+			map.TargetMethods = new MethodInfo[map.InterfaceMethods.Length];
+			map.TargetType = this;
+			FillInInterfaceMethods(interfaceType, map.InterfaceMethods, map.TargetMethods);
+			return map;
+		}
+
+		private void FillInInterfaceMethods(Type interfaceType, MethodInfo[] interfaceMethods, MethodInfo[] targetMethods)
+		{
+			FillInExplicitInterfaceMethods(interfaceMethods, targetMethods);
+			bool direct = IsDirectlyImplementedInterface(interfaceType);
+			if (direct)
 			{
-				Type baseType = this.BaseType;
-				if (baseType == null)
+				FillInImplicitInterfaceMethods(interfaceMethods, targetMethods);
+			}
+			Type baseType = this.BaseType;
+			if (baseType != null)
+			{
+				baseType.FillInInterfaceMethods(interfaceType, interfaceMethods, targetMethods);
+				ReplaceOverriddenMethods(targetMethods);
+			}
+			if (direct)
+			{
+				for (Type type = this.BaseType; type != null && type.Module == Module; type = type.BaseType)
 				{
-					throw new ArgumentException();
-				}
-				else
-				{
-					map = baseType.GetInterfaceMap(interfaceType);
+					type.FillInImplicitInterfaceMethods(interfaceMethods, targetMethods);
 				}
 			}
-			else
+		}
+
+		private void FillInImplicitInterfaceMethods(MethodInfo[] interfaceMethods, MethodInfo[] targetMethods)
+		{
+			MethodBase[] methods = null;
+			for (int i = 0; i < targetMethods.Length; i++)
 			{
-				map.InterfaceMethods = interfaceType.GetMethods(BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Public);
-				map.InterfaceType = interfaceType;
-				map.TargetMethods = new MethodInfo[map.InterfaceMethods.Length];
-				FillInExplicitInterfaceMethods(map.InterfaceMethods, map.TargetMethods);
-				MethodInfo[] methods = GetMethods(BindingFlags.Instance | BindingFlags.Public);
-				for (int i = 0; i < map.TargetMethods.Length; i++)
+				if (targetMethods[i] == null)
 				{
-					if (map.TargetMethods[i] == null)
+					if (methods == null)
 					{
-						// TODO use proper method resolution (also take into account that no implicit base class implementation is used across assembly boundaries)
-						for (int j = 0; j < methods.Length; j++)
+						methods = __GetDeclaredMethods();
+					}
+					for (int j = 0; j < methods.Length; j++)
+					{
+						if (methods[j].IsVirtual
+							&& methods[j].Name == interfaceMethods[i].Name
+							&& methods[j].MethodSignature.Equals(interfaceMethods[i].MethodSignature))
 						{
-							if (methods[j].Name == map.InterfaceMethods[i].Name
-								&& methods[j].MethodSignature.Equals(map.InterfaceMethods[i].MethodSignature))
-							{
-								map.TargetMethods[i] = methods[j];
-							}
+							targetMethods[i] = (MethodInfo)methods[j];
+							break;
 						}
 					}
 				}
-				for (Type baseType = this.BaseType; baseType != null && interfaceType.IsAssignableFrom(baseType); baseType = baseType.BaseType)
-				{
-					baseType.FillInExplicitInterfaceMethods(map.InterfaceMethods, map.TargetMethods);
-				}
 			}
-			map.TargetType = this;
-			return map;
+		}
+
+		private void ReplaceOverriddenMethods(MethodInfo[] baseMethods)
+		{
+			__MethodImplMap impl = __GetMethodImplMap();
+			for (int i = 0; i < baseMethods.Length; i++)
+			{
+				if (baseMethods[i] != null && !baseMethods[i].IsFinal)
+				{
+					MethodInfo def = baseMethods[i].GetBaseDefinition();
+					for (int j = 0; j < impl.MethodDeclarations.Length; j++)
+					{
+						for (int k = 0; k < impl.MethodDeclarations[j].Length; k++)
+						{
+							if (impl.MethodDeclarations[j][k].GetBaseDefinition() == def)
+							{
+								baseMethods[i] = impl.MethodBodies[j];
+								goto next;
+							}
+						}
+					}
+					MethodInfo candidate = FindMethod(def.Name, def.MethodSignature) as MethodInfo;
+					if (candidate != null && candidate.IsVirtual && !candidate.IsNewSlot)
+					{
+						baseMethods[i] = candidate;
+					}
+				}
+			next: ;
+			}
 		}
 
 		internal void FillInExplicitInterfaceMethods(MethodInfo[] interfaceMethods, MethodInfo[] targetMethods)
@@ -1788,28 +2079,6 @@ namespace IKVM.Reflection
 			}
 		}
 
-		internal bool IsPseudoCustomAttribute
-		{
-			get
-			{
-				Universe u = this.Module.universe;
-				return this == u.System_NonSerializedAttribute
-					|| this == u.System_SerializableAttribute
-					|| this == u.System_Runtime_InteropServices_DllImportAttribute
-					|| this == u.System_Runtime_InteropServices_FieldOffsetAttribute
-					|| this == u.System_Runtime_InteropServices_InAttribute
-					|| this == u.System_Runtime_InteropServices_MarshalAsAttribute
-					|| this == u.System_Runtime_InteropServices_OutAttribute
-					|| this == u.System_Runtime_InteropServices_StructLayoutAttribute
-					|| this == u.System_Runtime_InteropServices_OptionalAttribute
-					|| this == u.System_Runtime_InteropServices_PreserveSigAttribute
-					|| this == u.System_Runtime_InteropServices_ComImportAttribute
-					|| this == u.System_Runtime_CompilerServices_SpecialNameAttribute
-					|| this == u.System_Runtime_CompilerServices_MethodImplAttribute
-					;
-			}
-		}
-
 		internal Type MarkNotValueType()
 		{
 			typeFlags |= TypeFlags.NotValueType;
@@ -1828,7 +2097,7 @@ namespace IKVM.Reflection
 			MethodSignature methodSig = MethodSignature.MakeFromBuilder(u.System_Void, parameterTypes, new PackedCustomModifiers(), CallingConventions.Standard | CallingConventions.HasThis, 0);
 			MethodBase mb =
 				FindMethod(".ctor", methodSig) ??
-				u.GetMissingMethodOrThrow(this, ".ctor", methodSig);
+				u.GetMissingMethodOrThrow(null, this, ".ctor", methodSig);
 			return (ConstructorInfo)mb;
 		}
 
@@ -1879,19 +2148,49 @@ namespace IKVM.Reflection
 			return new MissingProperty(this, name, sig);
 		}
 
-		internal virtual Type SetMetadataTokenForMissing(int token)
+		internal virtual Type SetMetadataTokenForMissing(int token, int flags)
 		{
 			return this;
 		}
 
-		protected void MarkEnumOrValueType(string typeNamespace, string typeName)
+		internal virtual Type SetCyclicTypeForwarder()
+		{
+			return this;
+		}
+
+		protected void MarkKnownType(string typeNamespace, string typeName)
 		{
 			// we assume that mscorlib won't have nested types with these names,
 			// so we don't check that we're not a nested type
-			if (typeNamespace == "System"
-				&& (typeName == "Enum" || typeName == "ValueType"))
+			if (typeNamespace == "System")
 			{
-				typeFlags |= TypeFlags.PotentialEnumOrValueType;
+				switch (typeName)
+				{
+					case "Boolean":
+					case "Char":
+					case "Object":
+					case "String":
+					case "Single":
+					case "Double":
+					case "SByte":
+					case "Int16":
+					case "Int32":
+					case "Int64":
+					case "IntPtr":
+					case "UIntPtr":
+					case "TypedReference":
+					case "Byte":
+					case "UInt16":
+					case "UInt32":
+					case "UInt64":
+					case "Void":
+						typeFlags |= TypeFlags.PotentialBuiltIn;
+						break;
+					case "Enum":
+					case "ValueType":
+						typeFlags |= TypeFlags.PotentialEnumOrValueType;
+						break;
+				}
 			}
 		}
 
@@ -1900,7 +2199,7 @@ namespace IKVM.Reflection
 			if (this.Assembly == this.Universe.Mscorlib
 				|| this.Assembly.GetName().Name.Equals("mscorlib", StringComparison.OrdinalIgnoreCase)
 				// check if mscorlib forwards the type (.NETCore profile reference mscorlib forwards System.Enum and System.ValueType to System.Runtime.dll)
-				|| this.Universe.Mscorlib.FindType(new TypeName(__Namespace, __Name)) == this)
+				|| this.Universe.Mscorlib.FindType(TypeName) == this)
 			{
 				typeFlags = (typeFlags & ~TypeFlags.PotentialEnumOrValueType) | TypeFlags.EnumOrValueType;
 				return true;
@@ -1946,15 +2245,37 @@ namespace IKVM.Reflection
 			// types don't have pseudo custom attributes
 			return null;
 		}
+
+		// in .NET this is an extension method, but we target .NET 2.0, so we have an instance method
+		public TypeInfo GetTypeInfo()
+		{
+			TypeInfo type = this as TypeInfo;
+			if (type == null)
+			{
+				throw new MissingMemberException(this);
+			}
+			return type;
+		}
+
+		public virtual bool __IsTypeForwarder
+		{
+			get { return false; }
+		}
+
+		public virtual bool __IsCyclicTypeForwarder
+		{
+			get { return false; }
+		}
 	}
 
-	abstract class ElementHolderType : Type
+	abstract class ElementHolderType : TypeInfo
 	{
 		protected readonly Type elementType;
 		private int token;
 		private readonly CustomModifiers mods;
 
-		protected ElementHolderType(Type elementType, CustomModifiers mods)
+		protected ElementHolderType(Type elementType, CustomModifiers mods, byte sigElementType)
+			: base(sigElementType)
 		{
 			this.elementType = elementType;
 			this.mods = mods;
@@ -1997,11 +2318,6 @@ namespace IKVM.Reflection
 			return elementType;
 		}
 
-		public sealed override bool HasElementType
-		{
-			get { return true; }
-		}
-
 		public sealed override Module Module
 		{
 			get { return elementType.Module; }
@@ -2029,7 +2345,7 @@ namespace IKVM.Reflection
 			}
 		}
 
-		public sealed override bool __ContainsMissingType
+		protected sealed override bool ContainsMissingTypeImpl
 		{
 			get
 			{
@@ -2038,7 +2354,8 @@ namespace IKVM.Reflection
 				{
 					type = type.GetElementType();
 				}
-				return type.__ContainsMissingType;
+				return type.__ContainsMissingType
+					|| mods.ContainsMissingType;
 			}
 		}
 
@@ -2088,7 +2405,7 @@ namespace IKVM.Reflection
 		}
 
 		private ArrayType(Type type, CustomModifiers mods)
-			: base(type, mods)
+			: base(type, mods, Signature.ELEMENT_TYPE_SZARRAY)
 		{
 		}
 
@@ -2126,16 +2443,6 @@ namespace IKVM.Reflection
 		public override TypeAttributes Attributes
 		{
 			get { return TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.Serializable; }
-		}
-
-		public override bool IsArray
-		{
-			get { return true; }
-		}
-
-		public override bool __IsVector
-		{
-			get { return true; }
 		}
 
 		public override int GetArrayRank()
@@ -2176,7 +2483,7 @@ namespace IKVM.Reflection
 		}
 
 		private MultiArrayType(Type type, int rank, int[] sizes, int[] lobounds, CustomModifiers mods)
-			: base(type, mods)
+			: base(type, mods, Signature.ELEMENT_TYPE_ARRAY)
 		{
 			this.rank = rank;
 			this.sizes = sizes;
@@ -2214,11 +2521,6 @@ namespace IKVM.Reflection
 		public override TypeAttributes Attributes
 		{
 			get { return TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.Serializable; }
-		}
-
-		public override bool IsArray
-		{
-			get { return true; }
 		}
 
 		public override int GetArrayRank()
@@ -2400,7 +2702,7 @@ namespace IKVM.Reflection
 		}
 
 		private ByRefType(Type type, CustomModifiers mods)
-			: base(type, mods)
+			: base(type, mods, Signature.ELEMENT_TYPE_BYREF)
 		{
 		}
 
@@ -2424,11 +2726,6 @@ namespace IKVM.Reflection
 			get { return 0; }
 		}
 
-		public override bool IsByRef
-		{
-			get { return true; }
-		}
-
 		internal override string GetSuffix()
 		{
 			return "&";
@@ -2448,7 +2745,7 @@ namespace IKVM.Reflection
 		}
 
 		private PointerType(Type type, CustomModifiers mods)
-			: base(type, mods)
+			: base(type, mods, Signature.ELEMENT_TYPE_PTR)
 		{
 		}
 
@@ -2472,11 +2769,6 @@ namespace IKVM.Reflection
 			get { return 0; }
 		}
 
-		public override bool IsPointer
-		{
-			get { return true; }
-		}
-
 		internal override string GetSuffix()
 		{
 			return "*";
@@ -2488,7 +2780,7 @@ namespace IKVM.Reflection
 		}
 	}
 
-	sealed class GenericTypeInstance : Type
+	sealed class GenericTypeInstance : TypeInfo
 	{
 		private readonly Type type;
 		private readonly Type[] args;
@@ -2791,24 +3083,14 @@ namespace IKVM.Reflection
 			}
 		}
 
-		public override bool __ContainsMissingType
+		protected override bool ContainsMissingTypeImpl
 		{
-			get
-			{
-				foreach (Type type in args)
-				{
-					if (type.__ContainsMissingType)
-					{
-						return true;
-					}
-				}
-				return this.type.__IsMissing;
-			}
+			get { return type.__ContainsMissingType || ContainsMissingType(args); }
 		}
 
-		public override StructLayoutAttribute StructLayoutAttribute
+		public override bool __GetLayout(out int packingSize, out int typeSize)
 		{
-			get { return type.StructLayoutAttribute; }
+			return type.__GetLayout(out packingSize, out typeSize);
 		}
 
 		internal override int GetModuleBuilderToken()
@@ -2851,7 +3133,7 @@ namespace IKVM.Reflection
 		}
 	}
 
-	sealed class FunctionPointerType : Type
+	sealed class FunctionPointerType : TypeInfo
 	{
 		private readonly Universe universe;
 		private readonly __StandAloneMethodSig sig;
@@ -2862,6 +3144,7 @@ namespace IKVM.Reflection
 		}
 
 		private FunctionPointerType(Universe universe, __StandAloneMethodSig sig)
+			: base(Signature.ELEMENT_TYPE_FNPTR)
 		{
 			this.universe = universe;
 			this.sig = sig;
@@ -2878,11 +3161,6 @@ namespace IKVM.Reflection
 		public override int GetHashCode()
 		{
 			return sig.GetHashCode();
-		}
-
-		public override bool __IsFunctionPointer
-		{
-			get { return true; }
 		}
 
 		public override __StandAloneMethodSig __MethodSignature
@@ -2925,6 +3203,11 @@ namespace IKVM.Reflection
 			return "<FunctionPtr>";
 		}
 
+		protected override bool ContainsMissingTypeImpl
+		{
+			get { return sig.ContainsMissingType; }
+		}
+
 		internal override bool IsBaked
 		{
 			get { return true; }
@@ -2933,18 +3216,17 @@ namespace IKVM.Reflection
 
 	sealed class MarkerType : Type
 	{
-		// used by ILGenerator
-		internal static readonly Type Fault = new MarkerType();
-		internal static readonly Type Finally = new MarkerType();
-		internal static readonly Type Filter = new MarkerType();
 		// used by CustomModifiers and SignatureHelper
-		internal static readonly Type ModOpt = new MarkerType();
-		internal static readonly Type ModReq = new MarkerType();
+		internal static readonly Type ModOpt = new MarkerType(Signature.ELEMENT_TYPE_CMOD_OPT);
+		internal static readonly Type ModReq = new MarkerType(Signature.ELEMENT_TYPE_CMOD_REQD);
 		// used by SignatureHelper
-		internal static readonly Type Sentinel = new MarkerType();
-		internal static readonly Type Pinned = new MarkerType();
+		internal static readonly Type Sentinel = new MarkerType(Signature.SENTINEL);
+		internal static readonly Type Pinned = new MarkerType(Signature.ELEMENT_TYPE_PINNED);
 
-		private MarkerType() { }
+		private MarkerType(byte sigElementType)
+			: base(sigElementType)
+		{
+		}
 
 		public override Type BaseType
 		{
@@ -2974,6 +3256,11 @@ namespace IKVM.Reflection
 		internal override bool IsBaked
 		{
 			get { throw new InvalidOperationException(); }
+		}
+
+		public override bool __IsMissing
+		{
+			get { return false; }
 		}
 	}
 }

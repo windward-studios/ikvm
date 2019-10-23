@@ -5,7 +5,7 @@
     <authors>Jeroen Frijters</authors>
     <owners />
     <licenseUrl>http://sourceforge.net/apps/mediawiki/ikvm/index.php?title=License</licenseUrl>
-    <projectUrl>http://www.ikvm.net/</projectUrl>
+    <projectUrl>https://github.com/wwrd/ikvm8</projectUrl>
     <id>IKVM.WINDWARD</id>
     <title>IKVM.NET.WINDWARD-FORK</title>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>

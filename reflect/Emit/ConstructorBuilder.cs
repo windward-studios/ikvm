@@ -22,6 +22,7 @@
   
 */
 using System;
+using System.Collections.Generic;
 
 namespace IKVM.Reflection.Emit
 {
@@ -76,10 +77,12 @@ namespace IKVM.Reflection.Emit
 			methodBuilder.__AddDeclarativeSecurity(customBuilder);
 		}
 
+#if !CORECLR
 		public void AddDeclarativeSecurity(System.Security.Permissions.SecurityAction securityAction, System.Security.PermissionSet permissionSet)
 		{
 			methodBuilder.AddDeclarativeSecurity(securityAction, permissionSet);
 		}
+#endif
 
 		public void SetImplementationFlags(MethodImplAttributes attributes)
 		{
@@ -120,6 +123,11 @@ namespace IKVM.Reflection.Emit
 		{
 			get { return methodBuilder.InitLocals; }
 			set { methodBuilder.InitLocals = value; }
+		}
+
+		public void SetMethodBody(byte[] il, int maxStack, byte[] localSignature, IEnumerable<ExceptionHandler> exceptionHandlers, IEnumerable<int> tokenFixups)
+		{
+			methodBuilder.SetMethodBody(il, maxStack, localSignature, exceptionHandlers, tokenFixups);
 		}
 
 		internal override MethodInfo GetMethodInfo()

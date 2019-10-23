@@ -25,12 +25,16 @@ using System;
 using System.Globalization;
 using System.Configuration.Assemblies;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using IKVM.Reflection.Reader;
 
 namespace IKVM.Reflection
 {
-	public sealed class AssemblyName : ICloneable
+	public sealed class AssemblyName
+#if !CORECLR
+		: ICloneable
+#endif
 	{
 		private string name;
 		private string culture;
@@ -62,14 +66,17 @@ namespace IKVM.Reflection
 			switch (Fusion.ParseAssemblyName(assemblyName, out parsed))
 			{
 				case ParseAssemblyResult.GenericError:
-					throw new FileLoadException();
 				case ParseAssemblyResult.DuplicateKey:
-					throw new System.Runtime.InteropServices.COMException();
+					throw new FileLoadException();
+			}
+			if (!ParseVersion(parsed.Version, parsed.Retargetable.HasValue, out version))
+			{
+				throw new FileLoadException();
 			}
 			name = parsed.Name;
 			if (parsed.Culture != null)
 			{
-				if (parsed.Culture.Equals("neutral", StringComparison.InvariantCultureIgnoreCase))
+				if (parsed.Culture.Equals("neutral", StringComparison.OrdinalIgnoreCase))
 				{
 					culture = "";
 				}
@@ -82,14 +89,9 @@ namespace IKVM.Reflection
 					culture = new CultureInfo(parsed.Culture).Name;
 				}
 			}
-			if (parsed.Version != null && parsed.Version.Major != 65535 && parsed.Version.Minor != 65535)
-			{
-				// our Fusion parser returns -1 for build and revision for incomplete version numbers (and we want 65535)
-				version = new Version(parsed.Version.Major, parsed.Version.Minor, parsed.Version.Build & 0xFFFF, parsed.Version.Revision & 0xFFFF);
-			}
 			if (parsed.PublicKeyToken != null)
 			{
-				if (parsed.PublicKeyToken.Equals("null", StringComparison.InvariantCultureIgnoreCase))
+				if (parsed.PublicKeyToken.Equals("null", StringComparison.OrdinalIgnoreCase))
 				{
 					publicKeyToken = Empty<byte>.Array;
 				}
@@ -99,17 +101,12 @@ namespace IKVM.Reflection
 				}
 				else
 				{
-					publicKeyToken = new byte[8];
-					for (int i = 0, pos = 0; i < publicKeyToken.Length; i++, pos += 2)
-					{
-						publicKeyToken[i] = (byte)("0123456789abcdef".IndexOf(char.ToLowerInvariant(parsed.PublicKeyToken[pos])) * 16
-							+ "0123456789abcdef".IndexOf(char.ToLowerInvariant(parsed.PublicKeyToken[pos + 1])));
-					}
+					publicKeyToken = ParseKey(parsed.PublicKeyToken);
 				}
 			}
 			if (parsed.Retargetable.HasValue)
 			{
-				if (parsed.Culture == null || parsed.PublicKeyToken == null || parsed.Version == null || parsed.Version.Build == -1 || parsed.Version.Revision == -1)
+				if (parsed.Culture == null || parsed.PublicKeyToken == null || version == null)
 				{
 					throw new FileLoadException();
 				}
@@ -122,6 +119,40 @@ namespace IKVM.Reflection
 			if (parsed.WindowsRuntime)
 			{
 				ContentType = AssemblyContentType.WindowsRuntime;
+			}
+		}
+
+		private static byte[] ParseKey(string key)
+		{
+			if ((key.Length & 1) != 0)
+			{
+				throw new FileLoadException();
+			}
+			byte[] buf = new byte[key.Length / 2];
+			for (int i = 0; i < buf.Length; i++)
+			{
+				buf[i] = (byte)(ParseHexDigit(key[i * 2]) * 16 + ParseHexDigit(key[i * 2 + 1]));
+			}
+			return buf;
+		}
+
+		private static int ParseHexDigit(char digit)
+		{
+			if (digit >= '0' && digit <= '9')
+			{
+				return digit - '0';
+			}
+			else
+			{
+				digit |= (char)0x20;
+				if (digit >= 'a' && digit <= 'f')
+				{
+					return 10 + digit - 'a';
+				}
+				else
+				{
+					throw new FileLoadException();
+				}
 			}
 		}
 
@@ -140,6 +171,11 @@ namespace IKVM.Reflection
 		{
 			get { return culture == null ? null : new CultureInfo(culture); }
 			set { culture = value == null ? null : value.Name; }
+		}
+
+		public string CultureName
+		{
+			get { return culture; }
 		}
 
 		internal string Culture
@@ -166,6 +202,7 @@ namespace IKVM.Reflection
 			set { codeBase = value; }
 		}
 
+#if !CORECLR
 		public string EscapedCodeBase
 		{
 			get
@@ -176,6 +213,7 @@ namespace IKVM.Reflection
 				return tmp.EscapedCodeBase;
 			}
 		}
+#endif
 
 		public ProcessorArchitecture ProcessorArchitecture
 		{
@@ -258,110 +296,129 @@ namespace IKVM.Reflection
 				{
 					return "";
 				}
-				StringBuilder sb = new StringBuilder();
-				bool doubleQuotes = name.StartsWith(" ") || name.EndsWith(" ") || name.IndexOf('\'') != -1;
-				bool singleQuotes = name.IndexOf('"') != -1;
-				if (singleQuotes)
-				{
-					sb.Append('\'');
-				}
-				else if (doubleQuotes)
-				{
-					sb.Append('"');
-				}
-				if (name.IndexOf(',') != -1 || name.IndexOf('\\') != -1 || name.IndexOf('=') != -1 || (singleQuotes && name.IndexOf('\'') != -1))
-				{
-					for (int i = 0; i < name.Length; i++)
-					{
-						char c = name[i];
-						if (c == ',' || c == '\\' || c == '=' || (singleQuotes && c == '\''))
-						{
-							sb.Append('\\');
-						}
-						sb.Append(c);
-					}
-				}
-				else
-				{
-					sb.Append(name);
-				}
-				if (singleQuotes)
-				{
-					sb.Append('\'');
-				}
-				else if (doubleQuotes)
-				{
-					sb.Append('"');
-				}
+				ushort versionMajor = 0xFFFF;
+				ushort versionMinor = 0xFFFF;
+				ushort versionBuild = 0xFFFF;
+				ushort versionRevision = 0xFFFF;
 				if (version != null)
 				{
-					if ((version.Major & 0xFFFF) != 0xFFFF)
-					{
-						sb.Append(", Version=").Append(version.Major & 0xFFFF);
-						if ((version.Minor & 0xFFFF) != 0xFFFF)
-						{
-							sb.Append('.').Append(version.Minor & 0xFFFF);
-							if ((version.Build & 0xFFFF) != 0xFFFF)
-							{
-								sb.Append('.').Append(version.Build & 0xFFFF);
-								if ((version.Revision & 0xFFFF) != 0xFFFF)
-								{
-									sb.Append('.').Append(version.Revision & 0xFFFF);
-								}
-							}
-						}
-					}
-				}
-				if (culture != null)
-				{
-					sb.Append(", Culture=").Append(culture == "" ? "neutral" : culture);
+					versionMajor = (ushort)version.Major;
+					versionMinor = (ushort)version.Minor;
+					versionBuild = (ushort)version.Build;
+					versionRevision = (ushort)version.Revision;
 				}
 				byte[] publicKeyToken = this.publicKeyToken;
 				if ((publicKeyToken == null || publicKeyToken.Length == 0) && publicKey != null)
 				{
 					publicKeyToken = ComputePublicKeyToken(publicKey);
 				}
-				if (publicKeyToken != null)
-				{
-					sb.Append(", PublicKeyToken=");
-					if (publicKeyToken.Length == 0)
-					{
-						sb.Append("null");
-					}
-					else
-					{
-						AppendPublicKey(sb, publicKeyToken);
-					}
-				}
-				if ((Flags & AssemblyNameFlags.Retargetable) != 0)
-				{
-					sb.Append(", Retargetable=Yes");
-				}
-				if (ContentType == AssemblyContentType.WindowsRuntime)
-				{
-					sb.Append(", ContentType=WindowsRuntime");
-				}
-				return sb.ToString();
+				return GetFullName(name, versionMajor, versionMinor, versionBuild, versionRevision, culture, publicKeyToken, (int)flags);
 			}
 		}
 
-		private static byte[] ComputePublicKeyToken(byte[] publicKey)
+		internal static string GetFullName(string name, ushort versionMajor, ushort versionMinor, ushort versionBuild, ushort versionRevision, string culture, byte[] publicKeyToken, int flags)
+		{
+			StringBuilder sb = new StringBuilder();
+			bool doubleQuotes = name.StartsWith(" ") || name.EndsWith(" ") || name.IndexOf('\'') != -1;
+			bool singleQuotes = name.IndexOf('"') != -1;
+			if (singleQuotes)
+			{
+				sb.Append('\'');
+			}
+			else if (doubleQuotes)
+			{
+				sb.Append('"');
+			}
+			if (name.IndexOf(',') != -1 || name.IndexOf('\\') != -1 || name.IndexOf('=') != -1 || (singleQuotes && name.IndexOf('\'') != -1))
+			{
+				for (int i = 0; i < name.Length; i++)
+				{
+					char c = name[i];
+					if (c == ',' || c == '\\' || c == '=' || (singleQuotes && c == '\''))
+					{
+						sb.Append('\\');
+					}
+					sb.Append(c);
+				}
+			}
+			else
+			{
+				sb.Append(name);
+			}
+			if (singleQuotes)
+			{
+				sb.Append('\'');
+			}
+			else if (doubleQuotes)
+			{
+				sb.Append('"');
+			}
+			if (versionMajor != 0xFFFF)
+			{
+				sb.Append(", Version=").Append(versionMajor);
+				if (versionMinor != 0xFFFF)
+				{
+					sb.Append('.').Append(versionMinor);
+					if (versionBuild != 0xFFFF)
+					{
+						sb.Append('.').Append(versionBuild);
+						if (versionRevision != 0xFFFF)
+						{
+							sb.Append('.').Append(versionRevision);
+						}
+					}
+				}
+			}
+			if (culture != null)
+			{
+				sb.Append(", Culture=").Append(culture == "" ? "neutral" : culture);
+			}
+			if (publicKeyToken != null)
+			{
+				sb.Append(", PublicKeyToken=");
+				if (publicKeyToken.Length == 0)
+				{
+					sb.Append("null");
+				}
+				else
+				{
+					AppendPublicKey(sb, publicKeyToken);
+				}
+			}
+			if ((flags & (int)AssemblyNameFlags.Retargetable) != 0)
+			{
+				sb.Append(", Retargetable=Yes");
+			}
+			if ((AssemblyContentType)((flags & 0xE00) >> 9) == AssemblyContentType.WindowsRuntime)
+			{
+				sb.Append(", ContentType=WindowsRuntime");
+			}
+			return sb.ToString();
+		}
+
+		internal static byte[] ComputePublicKeyToken(byte[] publicKey)
 		{
 			if (publicKey.Length == 0)
 			{
 				return publicKey;
 			}
-			// HACK use the real AssemblyName to convert PublicKey to PublicKeyToken
-			StringBuilder sb = new StringBuilder("Foo, PublicKey=", 20 + publicKey.Length * 2);
-			AppendPublicKey(sb, publicKey);
-			string str = sb.ToString();
-			if (str == "Foo, PublicKey=00000000000000000400000000000000")
+			using (var sha1 = SHA1.Create())
 			{
-				// MONOBUG workaround Mono 2.10 bug (fixed in 2.11)
-				// it does not return the correct public key token for the ECMA key
-				return new byte[] { 0xB7, 0x7A, 0x5C, 0x56, 0x19, 0x34, 0xE0, 0x89 };
+				byte[] hash = sha1.ComputeHash(publicKey);
+				byte[] token = new byte[8];
+				for (int i = 0; i < token.Length; i++)
+				{
+					token[i] = hash[hash.Length - 1 - i];
+				}
+				return token;
 			}
-			return new System.Reflection.AssemblyName(str).GetPublicKeyToken();
+		}
+
+		internal static string ComputePublicKeyToken(string publicKey)
+		{
+			StringBuilder sb = new StringBuilder(16);
+			AppendPublicKey(sb, ComputePublicKeyToken(ParseKey(publicKey)));
+			return sb.ToString();
 		}
 
 		private static void AppendPublicKey(StringBuilder sb, byte[] publicKey)
@@ -397,11 +454,13 @@ namespace IKVM.Reflection
 			return b == null || b.Length == 0 ? b : (byte[])b.Clone();
 		}
 
+#if !CORECLR
 		public static bool ReferenceMatchesDefinition(AssemblyName reference, AssemblyName definition)
 		{
 			// HACK use the real AssemblyName to implement the (broken) ReferenceMatchesDefinition method
 			return System.Reflection.AssemblyName.ReferenceMatchesDefinition(new System.Reflection.AssemblyName(reference.FullName), new System.Reflection.AssemblyName(definition.FullName));
 		}
+#endif
 
 		public static AssemblyName GetAssemblyName(string path)
 		{
@@ -410,7 +469,7 @@ namespace IKVM.Reflection
 				path = Path.GetFullPath(path);
 				using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
 				{
-					ModuleReader module = new ModuleReader(null, null, fs, path);
+					ModuleReader module = new ModuleReader(null, null, fs, path, false);
 					if (module.Assembly == null)
 					{
 						throw new BadImageFormatException("Module does not contain a manifest");
@@ -432,6 +491,51 @@ namespace IKVM.Reflection
 		{
 			get { return flags; }
 			set { flags = value; }
+		}
+
+		private static bool ParseVersion(string str, bool mustBeComplete, out Version version)
+		{
+			if (str == null)
+			{
+				version = null;
+				return true;
+			}
+			string[] parts = str.Split('.');
+			if (parts.Length < 2 || parts.Length > 4)
+			{
+				version = null;
+				ushort dummy;
+				// if the version consists of a single integer, it is invalid, but not invalid enough to fail the parse of the whole assembly name
+				return parts.Length == 1 && ushort.TryParse(parts[0], NumberStyles.Integer, null, out dummy);
+			}
+			if (parts[0] == "" || parts[1] == "")
+			{
+				// this is a strange scenario, the version is invalid, but not invalid enough to fail the parse of the whole assembly name
+				version = null;
+				return true;
+			}
+			ushort major, minor, build = 65535, revision = 65535;
+			if (ushort.TryParse(parts[0], NumberStyles.Integer, null, out major)
+				&& ushort.TryParse(parts[1], NumberStyles.Integer, null, out minor)
+				&& (parts.Length <= 2 || parts[2] == "" || ushort.TryParse(parts[2], NumberStyles.Integer, null, out build))
+				&& (parts.Length <= 3 || parts[3] == "" || (parts[2] != "" && ushort.TryParse(parts[3], NumberStyles.Integer, null, out revision))))
+			{
+				if (mustBeComplete && (parts.Length < 4 || parts[2] == "" || parts[3] == ""))
+				{
+					version = null;
+				}
+				else if (major == 65535 || minor == 65535)
+				{
+					version = null;
+				}
+				else
+				{
+					version = new Version(major, minor, build, revision);
+				}
+				return true;
+			}
+			version = null;
+			return false;
 		}
 	}
 }

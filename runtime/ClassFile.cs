@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2012 Jeroen Frijters
+  Copyright (C) 2002-2015 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -39,8 +39,6 @@ namespace IKVM.Internal
 		NoSuchMethodError,
 		LinkageError,
 		// "exceptions" that are wrapped in an IncompatibleClassChangeError
-		NoSuchFieldException,
-		NoSuchMethodException,
 		IllegalAccessException,
 		// if an error is added here, it must also be added to MethodAnalyzer.SetHardError()
 	}
@@ -52,6 +50,8 @@ namespace IKVM.Internal
 		LocalVariableTable = 1,
 		LineNumberTable = 2,
 		RelaxedClassNameValidation = 4,
+		TrustedAnnotations = 8,
+		RemoveAssertions = 16,
 	}
 
 	sealed class ClassFile
@@ -65,8 +65,11 @@ namespace IKVM.Internal
 		private const ushort FLAG_MASK_MAJORVERSION = 0xFF;
 		private const ushort FLAG_MASK_DEPRECATED = 0x100;
 		private const ushort FLAG_MASK_INTERNAL = 0x200;
-		private const ushort FLAG_MASK_EFFECTIVELY_FINAL = 0x400;
-		private const ushort FLAG_HAS_CALLERID = 0x800;
+		private const ushort FLAG_CALLERSENSITIVE = 0x400;
+		private const ushort FLAG_LAMBDAFORM_COMPILED = 0x800;
+		private const ushort FLAG_LAMBDAFORM_HIDDEN = 0x1000;
+		private const ushort FLAG_FORCEINLINE = 0x2000;
+		private const ushort FLAG_HAS_ASSERTIONS = 0x4000;
 		private ConstantPoolItemClass[] interfaces;
 		private Field[] fields;
 		private Method[] methods;
@@ -80,19 +83,22 @@ namespace IKVM.Internal
 		private string signature;
 		private string[] enclosingMethod;
 		private BootstrapMethod[] bootstrapMethods;
+		private byte[] runtimeVisibleTypeAnnotations;
 
 		private static class SupportedVersions
 		{
 			internal static readonly int Minimum = 45;
-			internal static readonly int Maximum = JVM.SafeGetEnvironmentVariable("IKVM_EXPERIMENTAL_JDK_8") != null ? 52 : 51;
+			internal static readonly int Maximum = Experimental.JDK_9 ? 53 : 52;
 		}
 
 #if STATIC_COMPILER
-		// This method parses just enough of the class file to obtain its name, it doesn't
+		// This method parses just enough of the class file to obtain its name and
+		// determine if the class is a possible ikvmstub generated stub, it doesn't
 		// validate the class file structure, but it may throw a ClassFormatError if it
 		// encounters bogus data
-		internal static string GetClassName(byte[] buf, int offset, int length)
+		internal static string GetClassName(byte[] buf, int offset, int length, out bool isstub)
 		{
+			isstub = false;
 			BigEndianBinaryReader br = new BigEndianBinaryReader(buf, offset, length);
 			if(br.ReadUInt32() != 0xCAFEBABE)
 			{
@@ -141,7 +147,7 @@ namespace IKVM.Internal
 						br.Skip(2);
 						break;
 					case Constant.Utf8:
-						utf8_cp[i] = br.ReadString("<unknown>");
+						isstub |= (utf8_cp[i] = br.ReadString(null, majorVersion)) == "IKVM.NET.Assembly";
 						break;
 					default:
 						throw new ClassFormatError("Illegal constant pool type 0x{0:X}", tag);
@@ -159,7 +165,7 @@ namespace IKVM.Internal
 		}
 #endif // STATIC_COMPILER
 
-		internal ClassFile(byte[] buf, int offset, int length, string inputClassName, ClassFileParseOptions options)
+		internal ClassFile(byte[] buf, int offset, int length, string inputClassName, ClassFileParseOptions options, object[] constantPoolPatches)
 		{
 			try
 			{
@@ -235,11 +241,15 @@ namespace IKVM.Internal
 							constantpool[i] = new ConstantPoolItemString(br);
 							break;
 						case Constant.Utf8:
-							utf8_cp[i] = br.ReadString(inputClassName);
+							utf8_cp[i] = br.ReadString(inputClassName, majorVersion);
 							break;
 						default:
 							throw new ClassFormatError("{0} (Illegal constant pool type 0x{1:X})", inputClassName, tag);
 					}
+				}
+				if (constantPoolPatches != null)
+				{
+					PatchConstantPool(constantPoolPatches, utf8_cp, inputClassName);
 				}
 				for(int i = 1; i < constantpoolcount; i++)
 				{
@@ -282,7 +292,7 @@ namespace IKVM.Internal
 				ValidateConstantPoolItemClass(inputClassName, this_class);
 				super_class = br.ReadUInt16();
 				ValidateConstantPoolItemClass(inputClassName, super_class);
-				if(IsInterface && (super_class == 0 || this.SuperClass != "java.lang.Object"))
+				if(IsInterface && (super_class == 0 || this.SuperClass.Name != "java.lang.Object"))
 				{
 					throw new ClassFormatError("{0} (Interfaces must have java.lang.Object as superclass)", Name);
 				}
@@ -307,14 +317,8 @@ namespace IKVM.Internal
 						throw new ClassFormatError("{0} (Interface name has bad constant type)", Name);
 					}
 					interfaces[i] = cpi;
-					for(int j = 0; j < i; j++)
-					{
-						if(ReferenceEquals(interfaces[j].Name, cpi.Name))
-						{
-							throw new ClassFormatError("{0} (Repetitive interface name)", Name);
-						}
-					}
 				}
+				CheckDuplicates(interfaces, "Repetitive interface name");
 				int fields_count = br.ReadUInt16();
 				fields = new Field[fields_count];
 				for(int i = 0; i < fields_count; i++)
@@ -325,14 +329,8 @@ namespace IKVM.Internal
 					{
 						throw new ClassFormatError("{0} (Illegal field name \"{1}\")", Name, name);
 					}
-					for(int j = 0; j < i; j++)
-					{
-						if(ReferenceEquals(fields[j].Name, name) && ReferenceEquals(fields[j].Signature, fields[i].Signature))
-						{
-							throw new ClassFormatError("{0} (Repetitive field name/signature)", Name);
-						}
-					}
 				}
+				CheckDuplicates<FieldOrMethod>(fields, "Repetitive field name/signature");
 				int methods_count = br.ReadUInt16();
 				methods = new Method[methods_count];
 				for(int i = 0; i < methods_count; i++)
@@ -350,15 +348,13 @@ namespace IKVM.Internal
 						{
 							throw new ClassFormatError("{0} (Method \"{1}\" has illegal signature \"{2}\")", Name, name, sig);
 						}
-					}
-					for(int j = 0; j < i; j++)
-					{
-						if(ReferenceEquals(methods[j].Name, name) && ReferenceEquals(methods[j].Signature, sig))
+						if((options & ClassFileParseOptions.RemoveAssertions) != 0 && methods[i].IsClassInitializer)
 						{
-							throw new ClassFormatError("{0} (Repetitive method name/signature)", Name);
+							RemoveAssertionInit(methods[i]);
 						}
 					}
 				}
+				CheckDuplicates<FieldOrMethod>(methods, "Repetitive method name/signature");
 				int attributes_count = br.ReadUInt16();
 				for(int i = 0; i < attributes_count; i++)
 				{
@@ -440,8 +436,9 @@ namespace IKVM.Internal
 							}
 							else
 							{
-								int class_index = br.ReadUInt16();
-								int method_index = br.ReadUInt16();
+								ushort class_index = br.ReadUInt16();
+								ushort method_index = br.ReadUInt16();
+								ValidateConstantPoolItemClass(inputClassName, class_index);
 								if(method_index == 0)
 								{
 									enclosingMethod = new string[] {
@@ -452,7 +449,11 @@ namespace IKVM.Internal
 								}
 								else
 								{
-									ConstantPoolItemNameAndType m = (ConstantPoolItemNameAndType)GetConstantPoolItem(method_index);
+									ConstantPoolItemNameAndType m = GetConstantPoolItem(method_index) as ConstantPoolItemNameAndType;
+									if(m == null)
+									{
+										throw new ClassFormatError("{0} (Bad constant pool index #{1})", inputClassName, method_index);
+									}
 									enclosingMethod = new string[] {
 										GetConstantPoolClass(class_index),
 										GetConstantPoolUtf8String(utf8_cp, m.name_index),
@@ -490,6 +491,14 @@ namespace IKVM.Internal
 								goto default;
 							}
 							bootstrapMethods = ReadBootstrapMethods(br, this);
+							break;
+						case "RuntimeVisibleTypeAnnotations":
+							if(majorVersion < 52)
+							{
+								goto default;
+							}
+							CreateUtf8ConstantPoolItems(utf8_cp);
+							runtimeVisibleTypeAnnotations = br.Section(br.ReadUInt32()).ToArray();
 							break;
 						case "IKVM.NET.Assembly":
 							if(br.ReadUInt32() != 2)
@@ -538,6 +547,107 @@ namespace IKVM.Internal
 			//			fs.Close();
 			//			throw;
 			//		}
+		}
+
+		private void CreateUtf8ConstantPoolItems(string[] utf8_cp)
+		{
+			for (int i = 0; i < constantpool.Length; i++)
+			{
+				if (constantpool[i] == null && utf8_cp[i] != null)
+				{
+					constantpool[i] = new ConstantPoolItemUtf8(utf8_cp[i]);
+				}
+			}
+		}
+
+		private void CheckDuplicates<T>(T[] members, string msg)
+			where T : IEquatable<T>
+		{
+			if (members.Length < 100)
+			{
+				for (int i = 0; i < members.Length; i++)
+				{
+					for (int j = 0; j < i; j++)
+					{
+						if (members[i].Equals(members[j]))
+						{
+							throw new ClassFormatError("{0} ({1})", Name, msg);
+						}
+					}
+				}
+			}
+			else
+			{
+				Dictionary<T, object> dict = new Dictionary<T, object>();
+				for (int i = 0; i < members.Length; i++)
+				{
+					if (dict.ContainsKey(members[i]))
+					{
+						throw new ClassFormatError("{0} ({1})", Name, msg);
+					}
+					dict.Add(members[i], null);
+				}
+			}
+		}
+
+		private void PatchConstantPool(object[] constantPoolPatches, string[] utf8_cp, string inputClassName)
+		{
+#if !STATIC_COMPILER && !FIRST_PASS
+			for (int i = 0; i < constantPoolPatches.Length; i++)
+			{
+				if (constantPoolPatches[i] != null)
+				{
+					if (utf8_cp[i] != null)
+					{
+						if (!(constantPoolPatches[i] is string))
+						{
+							throw new ClassFormatError("Illegal utf8 patch at {0} in class file {1}", i, inputClassName);
+						}
+						utf8_cp[i] = (string)constantPoolPatches[i];
+					}
+					else if (constantpool[i] != null)
+					{
+						switch (constantpool[i].GetConstantType())
+						{
+							case ConstantType.String:
+								constantpool[i] = new ConstantPoolItemLiveObject(constantPoolPatches[i]);
+								break;
+							case ConstantType.Class:
+								java.lang.Class clazz;
+								string name;
+								if ((clazz = constantPoolPatches[i] as java.lang.Class) != null)
+								{
+									TypeWrapper tw = TypeWrapper.FromClass(clazz);
+									constantpool[i] = new ConstantPoolItemClass(tw.Name, tw);
+								}
+								else if ((name = constantPoolPatches[i] as string) != null)
+								{
+									constantpool[i] = new ConstantPoolItemClass(String.Intern(name.Replace('/', '.')), null);
+								}
+								else
+								{
+									throw new ClassFormatError("Illegal class patch at {0} in class file {1}", i, inputClassName);
+								}
+								break;
+							case ConstantType.Integer:
+								((ConstantPoolItemInteger)constantpool[i]).v = ((java.lang.Integer)constantPoolPatches[i]).intValue();
+								break;
+							case ConstantType.Long:
+								((ConstantPoolItemLong)constantpool[i]).l = ((java.lang.Long)constantPoolPatches[i]).longValue();
+								break;
+							case ConstantType.Float:
+								((ConstantPoolItemFloat)constantpool[i]).v = ((java.lang.Float)constantPoolPatches[i]).floatValue();
+								break;
+							case ConstantType.Double:
+								((ConstantPoolItemDouble)constantpool[i]).d = ((java.lang.Double)constantPoolPatches[i]).doubleValue();
+								break;
+							default:
+								throw new NotImplementedException("ConstantPoolPatch: " + constantPoolPatches[i]);
+						}
+					}
+				}
+			}
+#endif
 		}
 
 		private void MarkLinkRequiredConstantPoolItem(int index)
@@ -712,7 +822,7 @@ namespace IKVM.Internal
 			}
 			for(int i = 0; i < name.Length; i++)
 			{
-				if(".;/<>".IndexOf(name[i]) != -1)
+				if(".;[/<>".IndexOf(name[i]) != -1)
 				{
 					return false;
 				}
@@ -728,7 +838,7 @@ namespace IKVM.Internal
 			}
 			for(int i = 0; i < name.Length; i++)
 			{
-				if(".;/".IndexOf(name[i]) != -1)
+				if(".;[/".IndexOf(name[i]) != -1)
 				{
 					return false;
 				}
@@ -855,13 +965,15 @@ namespace IKVM.Internal
 			}
 		}
 
-		internal void Link(TypeWrapper thisType)
+		internal void Link(TypeWrapper thisType, LoadMode mode)
 		{
+			// this is not just an optimization, it's required for anonymous classes to be able to refer to themselves
+			((ConstantPoolItemClass)constantpool[this_class]).LinkSelf(thisType);
 			for(int i = 1; i < constantpool.Length; i++)
 			{
 				if(constantpool[i] != null)
 				{
-					constantpool[i].Link(thisType);
+					constantpool[i].Link(thisType, mode);
 				}
 			}
 		}
@@ -931,25 +1043,7 @@ namespace IKVM.Internal
 			}
 		}
 
-		internal void RemoveUnusedFields()
-		{
-			List<Field> list = new List<Field>();
-			foreach(Field f in fields)
-			{
-				if(f.IsPrivate && f.IsStatic && f.Name != "serialVersionUID" && !IsReferenced(f))
-				{
-					// unused, so we skip it
-					Tracer.Info(Tracer.Compiler, "Unused field {0}::{1}", this.Name, f.Name);
-				}
-				else
-				{
-					list.Add(f);
-				}
-			}
-			fields = list.ToArray();
-		}
-
-		private bool IsReferenced(Field fld)
+		internal bool IsReferenced(Field fld)
 		{
 			foreach(ConstantPoolItem cpi in constantpool)
 			{
@@ -1084,6 +1178,11 @@ namespace IKVM.Internal
 			return (ConstantPoolItemMethodType)constantpool[index];
 		}
 
+		internal object GetConstantPoolConstantLiveObject(int index)
+		{
+			return ((ConstantPoolItemLiveObject)constantpool[index]).Value;
+		}
+
 		internal string Name
 		{
 			get
@@ -1092,11 +1191,11 @@ namespace IKVM.Internal
 			}
 		}
 
-		internal string SuperClass
+		internal ConstantPoolItemClass SuperClass
 		{
 			get
 			{
-				return GetConstantPoolClass(super_class);
+				return (ConstantPoolItemClass)constantpool[super_class];
 			}
 		}
 
@@ -1166,6 +1265,27 @@ namespace IKVM.Internal
 			}
 		}
 
+		internal byte[] RuntimeVisibleTypeAnnotations
+		{
+			get
+			{
+				return runtimeVisibleTypeAnnotations;
+			}
+		}
+
+		internal object[] GetConstantPool()
+		{
+			object[] cp = new object[constantpool.Length];
+			for (int i = 1; i < cp.Length; i++)
+			{
+				if (constantpool[i] != null)
+				{
+					cp[i] = constantpool[i].GetRuntimeValue();
+				}
+			}
+			return cp;
+		}
+
 		internal string IKVMAssemblyAttribute
 		{
 			get
@@ -1197,16 +1317,11 @@ namespace IKVM.Internal
 			flags |= FLAG_MASK_INTERNAL;
 		}
 
-		internal void SetEffectivelyFinal()
-		{
-			flags |= FLAG_MASK_EFFECTIVELY_FINAL;
-		}
-
-		internal bool IsEffectivelyFinal
+		internal bool HasAssertions
 		{
 			get
 			{
-				return (flags & FLAG_MASK_EFFECTIVELY_FINAL) != 0;
+				return (flags & FLAG_HAS_ASSERTIONS) != 0;
 			}
 		}
 
@@ -1296,6 +1411,7 @@ namespace IKVM.Internal
 			Class,
 			MethodHandle,
 			MethodType,
+			LiveObject,		// used by anonymous class constant pool patching
 		}
 
 		internal abstract class ConstantPoolItem
@@ -1304,7 +1420,7 @@ namespace IKVM.Internal
 			{
 			}
 
-			internal virtual void Link(TypeWrapper thisType)
+			internal virtual void Link(TypeWrapper thisType, LoadMode mode)
 			{
 			}
 
@@ -1316,22 +1432,40 @@ namespace IKVM.Internal
 			internal virtual void MarkLinkRequired()
 			{
 			}
+
+			// this is used for sun.reflect.ConstantPool
+			// it returns a boxed System.Int32, System.Int64, System.Float, System.Double or a string
+			internal virtual object GetRuntimeValue()
+			{
+				return null;
+			}
 		}
 
-		internal sealed class ConstantPoolItemClass : ConstantPoolItem
+		internal sealed class ConstantPoolItemClass : ConstantPoolItem, IEquatable<ConstantPoolItemClass>
 		{
 			private ushort name_index;
 			private string name;
 			private TypeWrapper typeWrapper;
-			private static char[] invalidJava15Characters = { '.', ';' };
+			private static char[] invalidJava15Characters = { '.', ';', '[', ']' };
 
 			internal ConstantPoolItemClass(BigEndianBinaryReader br)
 			{
 				name_index = br.ReadUInt16();
 			}
 
+			internal ConstantPoolItemClass(string name, TypeWrapper typeWrapper)
+			{
+				this.name = name;
+				this.typeWrapper = typeWrapper;
+			}
+
 			internal override void Resolve(ClassFile classFile, string[] utf8_cp, ClassFileParseOptions options)
 			{
+				// if the item was patched, we already have a name
+				if(name != null)
+				{
+					return;
+				}
 				name = classFile.GetConstantPoolUtf8String(utf8_cp, name_index);
 				if(name.Length > 0)
 				{
@@ -1378,6 +1512,7 @@ namespace IKVM.Internal
 #endif
 					{
 						// since 1.5 the restrictions on class names have been greatly reduced
+						int start = 0;
 						int end = name.Length;
 						if(name[0] == '[')
 						{
@@ -1393,8 +1528,12 @@ namespace IKVM.Internal
 							{
 								end--;
 							}
+							while(name[start] == '[')
+							{
+								start++;
+							}
 						}
-						if(name.IndexOfAny(invalidJava15Characters, 0, end) >= 0)
+						if(name.IndexOfAny(invalidJava15Characters, start, end - start) >= 0)
 						{
 							goto barf;
 						}
@@ -1408,14 +1547,36 @@ namespace IKVM.Internal
 
 			internal override void MarkLinkRequired()
 			{
-				typeWrapper = VerifierTypeWrapper.Null;
+				if(typeWrapper == null)
+				{
+					typeWrapper = VerifierTypeWrapper.Null;
+				}
 			}
 
-			internal override void Link(TypeWrapper thisType)
+			internal void LinkSelf(TypeWrapper thisType)
+			{
+				this.typeWrapper = thisType;
+			}
+
+			internal override void Link(TypeWrapper thisType, LoadMode mode)
 			{
 				if(typeWrapper == VerifierTypeWrapper.Null)
 				{
-					typeWrapper = ClassLoaderWrapper.LoadClassNoThrow(thisType.GetClassLoader(), name);
+					TypeWrapper tw = thisType.GetClassLoader().LoadClass(name, mode | LoadMode.WarnClassNotFound);
+#if !STATIC_COMPILER && !FIRST_PASS
+					if(!tw.IsUnloadable)
+					{
+						try
+						{
+							thisType.GetClassLoader().CheckPackageAccess(tw, thisType.ClassObject.pd);
+						}
+						catch(java.lang.SecurityException)
+						{
+							tw = new UnloadableTypeWrapper(name);
+						}
+					}
+#endif
+					typeWrapper = tw;
 				}
 			}
 
@@ -1436,11 +1597,21 @@ namespace IKVM.Internal
 			{
 				return ConstantType.Class;
 			}
+
+			public sealed override int GetHashCode()
+			{
+				return name.GetHashCode();
+			}
+
+			public bool Equals(ConstantPoolItemClass other)
+			{
+				return ReferenceEquals(name, other.name);
+			}
 		}
 
 		private sealed class ConstantPoolItemDouble : ConstantPoolItem
 		{
-			private double d;
+			internal double d;
 
 			internal ConstantPoolItemDouble(BigEndianBinaryReader br)
 			{
@@ -1458,6 +1629,11 @@ namespace IKVM.Internal
 				{
 					return d;
 				}
+			}
+
+			internal override object GetRuntimeValue()
+			{
+				return d;
 			}
 		}
 
@@ -1497,9 +1673,9 @@ namespace IKVM.Internal
 				clazz.MarkLinkRequired();
 			}
 
-			internal override void Link(TypeWrapper thisType)
+			internal override void Link(TypeWrapper thisType, LoadMode mode)
 			{
-				clazz.Link(thisType);
+				clazz.Link(thisType, mode);
 			}
 
 			internal string Name
@@ -1560,9 +1736,9 @@ namespace IKVM.Internal
 				return fieldTypeWrapper;
 			}
 
-			internal override void Link(TypeWrapper thisType)
+			internal override void Link(TypeWrapper thisType, LoadMode mode)
 			{
-				base.Link(thisType);
+				base.Link(thisType, mode);
 				lock(this)
 				{
 					if(fieldTypeWrapper != null)
@@ -1581,11 +1757,11 @@ namespace IKVM.Internal
 					fw = wrapper.GetFieldWrapper(Name, Signature);
 					if(fw != null)
 					{
-						fw.Link();
+						fw.Link(mode);
 					}
 				}
 				ClassLoaderWrapper classLoader = thisType.GetClassLoader();
-				TypeWrapper fld = classLoader.FieldTypeWrapperFromSigNoThrow(this.Signature);
+				TypeWrapper fld = classLoader.FieldTypeWrapperFromSig(this.Signature, mode);
 				lock(this)
 				{
 					if(fieldTypeWrapper == null)
@@ -1637,9 +1813,9 @@ namespace IKVM.Internal
 				}
 			}
 
-			internal override void Link(TypeWrapper thisType)
+			internal override void Link(TypeWrapper thisType, LoadMode mode)
 			{
-				base.Link(thisType);
+				base.Link(thisType, mode);
 				lock(this)
 				{
 					if(argTypeWrappers != null)
@@ -1648,8 +1824,8 @@ namespace IKVM.Internal
 					}
 				}
 				ClassLoaderWrapper classLoader = thisType.GetClassLoader();
-				TypeWrapper[] args = classLoader.ArgTypeWrapperListFromSigNoThrow(this.Signature);
-				TypeWrapper ret = classLoader.RetTypeWrapperFromSigNoThrow(this.Signature);
+				TypeWrapper[] args = classLoader.ArgTypeWrapperListFromSig(this.Signature, mode);
+				TypeWrapper ret = classLoader.RetTypeWrapperFromSig(this.Signature, mode);
 				lock(this)
 				{
 					if(argTypeWrappers == null)
@@ -1692,25 +1868,27 @@ namespace IKVM.Internal
 			{
 			}
 
-			internal override void Link(TypeWrapper thisType)
+			internal override void Link(TypeWrapper thisType, LoadMode mode)
 			{
-				base.Link(thisType);
+				base.Link(thisType, mode);
 				TypeWrapper wrapper = GetClassType();
 				if(wrapper != null && !wrapper.IsUnloadable)
 				{
 					method = wrapper.GetMethodWrapper(Name, Signature, !ReferenceEquals(Name, StringConstants.INIT));
 					if(method != null)
 					{
-						method.Link();
+						method.Link(mode);
 					}
-					if(Name != StringConstants.INIT && 
-						(thisType.Modifiers & (Modifiers.Interface | Modifiers.Super)) == Modifiers.Super &&
-						thisType != wrapper && thisType.IsSubTypeOf(wrapper))
+					if(Name != StringConstants.INIT
+						&& !thisType.IsInterface
+						&& (!JVM.AllowNonVirtualCalls || (thisType.Modifiers & Modifiers.Super) == Modifiers.Super)
+						&& thisType != wrapper
+						&& thisType.IsSubTypeOf(wrapper))
 					{
 						invokespecialMethod = thisType.BaseTypeWrapper.GetMethodWrapper(Name, Signature, true);
 						if(invokespecialMethod != null)
 						{
-							invokespecialMethod.Link();
+							invokespecialMethod.Link(mode);
 						}
 					}
 				}
@@ -1723,32 +1901,16 @@ namespace IKVM.Internal
 			{
 			}
 
-			private static MethodWrapper GetInterfaceMethod(TypeWrapper wrapper, string name, string sig)
+			internal override void Link(TypeWrapper thisType, LoadMode mode)
 			{
-				MethodWrapper method = wrapper.GetMethodWrapper(name, sig, false);
-				if(method != null)
-				{
-					return method;
-				}
-				TypeWrapper[] interfaces = wrapper.Interfaces;
-				for(int i = 0; i < interfaces.Length; i++)
-				{
-					method = GetInterfaceMethod(interfaces[i], name, sig);
-					if(method != null)
-					{
-						return method;
-					}
-				}
-				return null;
-			}
-
-			internal override void Link(TypeWrapper thisType)
-			{
-				base.Link(thisType);
+				base.Link(thisType, mode);
 				TypeWrapper wrapper = GetClassType();
-				if(wrapper != null && !wrapper.IsUnloadable)
+				if(wrapper != null)
 				{
-					method = GetInterfaceMethod(wrapper, Name, Signature);
+					if(!wrapper.IsUnloadable)
+					{
+						method = wrapper.GetInterfaceMethod(Name, Signature);
+					}
 					if(method == null)
 					{
 						// NOTE vmspec 5.4.3.4 clearly states that an interfacemethod may also refer to a method in Object
@@ -1756,7 +1918,7 @@ namespace IKVM.Internal
 					}
 					if(method != null)
 					{
-						method.Link();
+						method.Link(mode);
 					}
 				}
 			}
@@ -1764,7 +1926,7 @@ namespace IKVM.Internal
 
 		private sealed class ConstantPoolItemFloat : ConstantPoolItem
 		{
-			private float v;
+			internal float v;
 
 			internal ConstantPoolItemFloat(BigEndianBinaryReader br)
 			{
@@ -1783,11 +1945,16 @@ namespace IKVM.Internal
 					return v;
 				}
 			}
+
+			internal override object GetRuntimeValue()
+			{
+				return v;
+			}
 		}
 
 		private sealed class ConstantPoolItemInteger : ConstantPoolItem
 		{
-			private int v;
+			internal int v;
 
 			internal ConstantPoolItemInteger(BigEndianBinaryReader br)
 			{
@@ -1806,11 +1973,16 @@ namespace IKVM.Internal
 					return v;
 				}
 			}
+
+			internal override object GetRuntimeValue()
+			{
+				return v;
+			}
 		}
 
 		private sealed class ConstantPoolItemLong : ConstantPoolItem
 		{
-			private long l;
+			internal long l;
 
 			internal ConstantPoolItemLong(BigEndianBinaryReader br)
 			{
@@ -1828,6 +2000,11 @@ namespace IKVM.Internal
 				{
 					return l;
 				}
+			}
+
+			internal override object GetRuntimeValue()
+			{
+				return l;
 			}
 		}
 
@@ -1879,6 +2056,8 @@ namespace IKVM.Internal
 					case RefKind.invokeStatic:
 					case RefKind.newInvokeSpecial:
 						cpi = classFile.GetConstantPoolItem(method_index) as ConstantPoolItemMethodref;
+						if (cpi == null && classFile.MajorVersion >= 52 && ((RefKind)ref_kind == RefKind.invokeStatic || (RefKind)ref_kind == RefKind.invokeSpecial))
+							goto case RefKind.invokeInterface;
 						break;
 					case RefKind.invokeInterface:
 						cpi = classFile.GetConstantPoolItem(method_index) as ConstantPoolItemInterfaceMethodref;
@@ -1934,9 +2113,9 @@ namespace IKVM.Internal
 				return cpi.GetClassType();
 			}
 
-			internal override void Link(TypeWrapper thisType)
+			internal override void Link(TypeWrapper thisType, LoadMode mode)
 			{
-				cpi.Link(thisType);
+				cpi.Link(thisType, mode);
 			}
 
 			internal override ConstantType GetConstantType()
@@ -1967,7 +2146,7 @@ namespace IKVM.Internal
 				this.descriptor = String.Intern(descriptor.Replace('/', '.'));
 			}
 
-			internal override void Link(TypeWrapper thisType)
+			internal override void Link(TypeWrapper thisType, LoadMode mode)
 			{
 				lock (this)
 				{
@@ -1977,8 +2156,8 @@ namespace IKVM.Internal
 					}
 				}
 				ClassLoaderWrapper classLoader = thisType.GetClassLoader();
-				TypeWrapper[] args = classLoader.ArgTypeWrapperListFromSigNoThrow(descriptor);
-				TypeWrapper ret = classLoader.RetTypeWrapperFromSigNoThrow(descriptor);
+				TypeWrapper[] args = classLoader.ArgTypeWrapperListFromSig(descriptor, mode);
+				TypeWrapper ret = classLoader.RetTypeWrapperFromSig(descriptor, mode);
 				lock (this)
 				{
 					if (argTypeWrappers == null)
@@ -1987,6 +2166,11 @@ namespace IKVM.Internal
 						retTypeWrapper = ret;
 					}
 				}
+			}
+
+			internal string Signature
+			{
+				get { return descriptor; }
 			}
 
 			internal TypeWrapper[] GetArgTypes()
@@ -2032,7 +2216,7 @@ namespace IKVM.Internal
 				descriptor = String.Intern(classFile.GetConstantPoolUtf8String(utf8_cp, name_and_type.descriptor_index).Replace('/', '.'));
 			}
 
-			internal override void Link(TypeWrapper thisType)
+			internal override void Link(TypeWrapper thisType, LoadMode mode)
 			{
 				lock (this)
 				{
@@ -2042,8 +2226,8 @@ namespace IKVM.Internal
 					}
 				}
 				ClassLoaderWrapper classLoader = thisType.GetClassLoader();
-				TypeWrapper[] args = classLoader.ArgTypeWrapperListFromSigNoThrow(descriptor);
-				TypeWrapper ret = classLoader.RetTypeWrapperFromSigNoThrow(descriptor);
+				TypeWrapper[] args = classLoader.ArgTypeWrapperListFromSig(descriptor, mode);
+				TypeWrapper ret = classLoader.RetTypeWrapperFromSig(descriptor, mode);
 				lock (this)
 				{
 					if (argTypeWrappers == null)
@@ -2067,6 +2251,11 @@ namespace IKVM.Internal
 			internal string Name
 			{
 				get { return name; }
+			}
+
+			internal string Signature
+			{
+				get { return descriptor; }
 			}
 
 			internal ushort BootstrapMethod
@@ -2104,6 +2293,38 @@ namespace IKVM.Internal
 			}
 		}
 
+		// this is only used to copy strings into "constantpool" when we see a RuntimeVisibleTypeAnnotations attribute,
+		// because we need a consistent way of exposing constant pool items to the runtime and that case
+		private sealed class ConstantPoolItemUtf8 : ConstantPoolItem
+		{
+			private readonly string str;
+
+			internal ConstantPoolItemUtf8(string str)
+			{
+				this.str = str;
+			}
+
+			internal override object GetRuntimeValue()
+			{
+				return str;
+			}
+		}
+
+		private sealed class ConstantPoolItemLiveObject : ConstantPoolItem
+		{
+			internal readonly object Value;
+
+			internal ConstantPoolItemLiveObject(object value)
+			{
+				this.Value = value;
+			}
+
+			internal override ConstantType GetConstantType()
+			{
+				return ConstantType.LiveObject;
+			}
+		}
+
 		internal enum Constant
 		{
 			Utf8 = 1,
@@ -2122,7 +2343,7 @@ namespace IKVM.Internal
 			InvokeDynamic = 18,
 		}
 
-		internal abstract class FieldOrMethod
+		internal abstract class FieldOrMethod : IEquatable<FieldOrMethod>
 		{
 			// Note that Modifiers is a ushort, so it combines nicely with the following ushort field
 			protected Modifiers access_flags;
@@ -2131,6 +2352,7 @@ namespace IKVM.Internal
 			private string descriptor;
 			protected string signature;
 			protected object[] annotations;
+			protected byte[] runtimeVisibleTypeAnnotations;
 
 			internal FieldOrMethod(ClassFile classFile, string[] utf8_cp, BigEndianBinaryReader br)
 			{
@@ -2286,6 +2508,24 @@ namespace IKVM.Internal
 					return (flags & FLAG_MASK_INTERNAL) != 0;
 				}
 			}
+
+			internal byte[] RuntimeVisibleTypeAnnotations
+			{
+				get
+				{
+					return runtimeVisibleTypeAnnotations;
+				}
+			}
+
+			public sealed override int GetHashCode()
+			{
+				return name.GetHashCode() ^ descriptor.GetHashCode();
+			}
+
+			public bool Equals(FieldOrMethod other)
+			{
+				return ReferenceEquals(name, other.name) && ReferenceEquals(descriptor, other.descriptor);
+			}
 		}
 
 		internal sealed class Field : FieldOrMethod
@@ -2411,6 +2651,14 @@ namespace IKVM.Internal
 #endif
 							}
 							break;
+						case "RuntimeVisibleTypeAnnotations":
+							if (classFile.MajorVersion < 52)
+							{
+								goto default;
+							}
+							classFile.CreateUtf8ConstantPoolItems(utf8_cp);
+							runtimeVisibleTypeAnnotations = br.Section(br.ReadUInt32()).ToArray();
+							break;
 						default:
 							br.Skip(br.ReadUInt32());
 							break;
@@ -2472,6 +2720,11 @@ namespace IKVM.Internal
 				}
 			}
 
+			internal void PatchConstantValue(object value)
+			{
+				constantValue = value;
+			}
+
 			internal bool IsStaticFinalConstant
 			{
 				get { return (access_flags & (Modifiers.Final | Modifiers.Static)) == (Modifiers.Final | Modifiers.Static) && constantValue != null; }
@@ -2507,6 +2760,7 @@ namespace IKVM.Internal
 			private Code code;
 			private string[] exceptions;
 			private LowFreqData low;
+			private MethodParametersEntry[] parameters;
 
 			sealed class LowFreqData
 			{
@@ -2515,6 +2769,7 @@ namespace IKVM.Internal
 #if STATIC_COMPILER
 				internal string DllExportName;
 				internal int DllExportOrdinal;
+				internal string InterlockedCompareAndSetField;
 #endif
 			}
 
@@ -2534,9 +2789,10 @@ namespace IKVM.Internal
 					if((ReferenceEquals(Name, StringConstants.INIT) && (IsStatic || IsSynchronized || IsFinal || IsAbstract || IsNative))
 						|| (IsPrivate && IsPublic) || (IsPrivate && IsProtected) || (IsPublic && IsProtected)
 						|| (IsAbstract && (IsFinal || IsNative || IsPrivate || IsStatic || IsSynchronized))
-						|| (classFile.IsInterface && (!IsPublic || !IsAbstract)))
+						|| (classFile.IsInterface && classFile.MajorVersion <= 51 && (!IsPublic || IsFinal || IsNative || IsSynchronized || !IsAbstract))
+						|| (classFile.IsInterface && classFile.MajorVersion >= 52 && (!(IsPublic || IsPrivate) || IsFinal || IsNative || IsSynchronized)))
 					{
-						throw new ClassFormatError("{0} (Illegal method modifiers: 0x{1:X})", classFile.Name, access_flags);
+						throw new ClassFormatError("Method {0} in class {1} has illegal modifiers: 0x{2:X}", Name, classFile.Name, (int)access_flags);
 					}
 				}
 				int attributes_count = br.ReadUInt16();
@@ -2601,6 +2857,29 @@ namespace IKVM.Internal
 								goto default;
 							}
 							annotations = ReadAnnotations(br, classFile, utf8_cp);
+							if ((options & ClassFileParseOptions.TrustedAnnotations) != 0)
+							{
+								foreach(object[] annot in annotations)
+								{
+									switch((string)annot[1])
+									{
+#if STATIC_COMPILER
+										case "Lsun/reflect/CallerSensitive;":
+											flags |= FLAG_CALLERSENSITIVE;
+											break;
+#endif
+										case "Ljava/lang/invoke/LambdaForm$Compiled;":
+											flags |= FLAG_LAMBDAFORM_COMPILED;
+											break;
+										case "Ljava/lang/invoke/LambdaForm$Hidden;":
+											flags |= FLAG_LAMBDAFORM_HIDDEN;
+											break;
+										case "Ljava/lang/invoke/ForceInline;":
+											flags |= FLAG_FORCEINLINE;
+											break;
+									}
+								}
+							}
 							break;
 						case "RuntimeVisibleParameterAnnotations":
 						{
@@ -2668,10 +2947,6 @@ namespace IKVM.Internal
 										flags |= FLAG_MASK_INTERNAL;
 									}
 								}
-								if(annot[1].Equals("Likvm/internal/HasCallerID;"))
-								{
-									flags |= FLAG_HAS_CALLERID;
-								}
 								if(annot[1].Equals("Likvm/lang/DllExport;"))
 								{
 									string name = null;
@@ -2704,9 +2979,49 @@ namespace IKVM.Internal
 										}
 									}
 								}
+								if(annot[1].Equals("Likvm/internal/InterlockedCompareAndSet;"))
+								{
+									string field = null;
+									for (int j = 2; j < annot.Length; j += 2)
+									{
+										if (annot[j].Equals("value") && annot[j + 1] is string)
+										{
+											field = (string)annot[j + 1];
+										}
+									}
+									if (field != null)
+									{
+										if (low == null)
+										{
+											low = new LowFreqData();
+										}
+										low.InterlockedCompareAndSetField = field;
+									}
+								}
 							}
 							break;
 #endif
+						case "MethodParameters":
+						{
+							if(classFile.MajorVersion < 52)
+							{
+								goto default;
+							}
+							if(parameters != null)
+							{
+								throw new ClassFormatError("{0} (Duplicate MethodParameters attribute)", classFile.Name);
+							}
+							parameters = ReadMethodParameters(br, utf8_cp);
+							break;
+						}
+						case "RuntimeVisibleTypeAnnotations":
+							if (classFile.MajorVersion < 52)
+							{
+								goto default;
+							}
+							classFile.CreateUtf8ConstantPoolItems(utf8_cp);
+							runtimeVisibleTypeAnnotations = br.Section(br.ReadUInt32()).ToArray();
+							break;
 						default:
 							br.Skip(br.ReadUInt32());
 							break;
@@ -2716,7 +3031,7 @@ namespace IKVM.Internal
 				{
 					if(!code.IsEmpty)
 					{
-						throw new ClassFormatError("Abstract or native method cannot have a Code attribute");
+						throw new ClassFormatError("Code attribute in native or abstract methods in class file " + classFile.Name);
 					}
 				}
 				else
@@ -2728,9 +3043,35 @@ namespace IKVM.Internal
 							code.verifyError = string.Format("Class {0}, method {1} signature {2}: No Code attribute", classFile.Name, this.Name, this.Signature);
 							return;
 						}
-						throw new ClassFormatError("Method has no Code attribute");
+						throw new ClassFormatError("Absent Code attribute in method that is not native or abstract in class file " + classFile.Name);
 					}
 				}
+			}
+
+			private static MethodParametersEntry[] ReadMethodParameters(BigEndianBinaryReader br, string[] utf8_cp)
+			{
+				uint length = br.ReadUInt32();
+				if(length > 0)
+				{
+					BigEndianBinaryReader rdr = br.Section(length);
+					byte parameters_count = rdr.ReadByte();
+					if(length == 1 + parameters_count * 4)
+					{
+						MethodParametersEntry[] parameters = new MethodParametersEntry[parameters_count];
+						for(int j = 0; j < parameters_count; j++)
+						{
+							ushort name = rdr.ReadUInt16();
+							if(name >= utf8_cp.Length || (name != 0 && utf8_cp[name] == null))
+							{
+								return MethodParametersEntry.Malformed;
+							}
+							parameters[j].name = utf8_cp[name];
+							parameters[j].flags = rdr.ReadUInt16();
+						}
+						return parameters;
+					}
+				}
+				throw new ClassFormatError("Invalid MethodParameters method attribute length " + length + " in class file");
 			}
 
 			protected override void ValidateSig(ClassFile classFile, string descriptor)
@@ -2746,6 +3087,15 @@ namespace IKVM.Internal
 				get
 				{
 					return (access_flags & Modifiers.Strictfp) != 0;
+				}
+			}
+
+			internal bool IsVirtual
+			{
+				get
+				{
+					return (access_flags & (Modifiers.Static | Modifiers.Private)) == 0
+						&& !IsConstructor;
 				}
 			}
 
@@ -2766,12 +3116,37 @@ namespace IKVM.Internal
 				}
 			}
 
-			// for use by ikvmc only
-			internal bool HasCallerIDAnnotation
+#if STATIC_COMPILER
+			internal bool IsCallerSensitive
 			{
 				get
 				{
-					return (flags & FLAG_HAS_CALLERID) != 0;
+					return (flags & FLAG_CALLERSENSITIVE) != 0;
+				}
+			}
+#endif
+
+			internal bool IsLambdaFormCompiled
+			{
+				get
+				{
+					return (flags & FLAG_LAMBDAFORM_COMPILED) != 0;
+				}
+			}
+
+			internal bool IsLambdaFormHidden
+			{
+				get
+				{
+					return (flags & FLAG_LAMBDAFORM_HIDDEN) != 0;
+				}
+			}
+
+			internal bool IsForceInline
+			{
+				get
+				{
+					return (flags & FLAG_FORCEINLINE) != 0;
 				}
 			}
 
@@ -2813,6 +3188,14 @@ namespace IKVM.Internal
 				get
 				{
 					return low == null ? -1 : low.DllExportOrdinal;
+				}
+			}
+
+			internal string InterlockedCompareAndSetField
+			{
+				get
+				{
+					return low == null ? null : low.InterlockedCompareAndSetField;
 				}
 			}
 #endif
@@ -2890,6 +3273,22 @@ namespace IKVM.Internal
 				}
 			}
 
+			internal MethodParametersEntry[] MethodParameters
+			{
+				get
+				{
+					return parameters;
+				}
+			}
+
+			internal bool MalformedMethodParameters
+			{
+				get
+				{
+					return parameters == MethodParametersEntry.Malformed;
+				}
+			}
+
 			internal bool HasJsr
 			{
 				get
@@ -2915,9 +3314,9 @@ namespace IKVM.Internal
 					max_stack = br.ReadUInt16();
 					max_locals = br.ReadUInt16();
 					uint code_length = br.ReadUInt32();
-					if(code_length > 65535)
+					if(code_length == 0 || code_length > 65535)
 					{
-						throw new ClassFormatError("{0} (Invalid Code length {1})", classFile.Name, code_length);
+						throw new ClassFormatError("Invalid method Code length {1} in class file {0}", classFile.Name, code_length);
 					}
 					Instruction[] instructions = new Instruction[code_length + 1];
 					int basePosition = br.Position;
@@ -3485,13 +3884,122 @@ namespace IKVM.Internal
 			return null;
 		}
 
-		internal bool HasSerialVersionUID
+		private void RemoveAssertionInit(Method m)
 		{
-			get
+			/* We match the following code sequence:
+			 *   0  ldc <class X>
+			 *   2  invokevirtual <Method java/lang/Class desiredAssertionStatus()Z>
+			 *   5  ifne 12
+			 *   8  iconst_1
+			 *   9  goto 13
+			 *  12  iconst_0
+			 *  13  putstatic <Field <this class> boolean <static final field>>
+			 */
+			ConstantPoolItemFieldref fieldref;
+			Field field;
+			if (m.Instructions[0].NormalizedOpCode == NormalizedByteCode.__ldc && SafeIsConstantPoolClass(m.Instructions[0].Arg1)
+				&& m.Instructions[1].NormalizedOpCode == NormalizedByteCode.__invokevirtual && IsDesiredAssertionStatusMethodref(m.Instructions[1].Arg1)
+				&& m.Instructions[2].NormalizedOpCode == NormalizedByteCode.__ifne && m.Instructions[2].TargetIndex == 5
+				&& m.Instructions[3].NormalizedOpCode == NormalizedByteCode.__iconst && m.Instructions[3].Arg1 == 1
+				&& m.Instructions[4].NormalizedOpCode == NormalizedByteCode.__goto && m.Instructions[4].TargetIndex == 6
+				&& m.Instructions[5].NormalizedOpCode == NormalizedByteCode.__iconst && m.Instructions[5].Arg1 == 0
+				&& m.Instructions[6].NormalizedOpCode == NormalizedByteCode.__putstatic && (fieldref = SafeGetFieldref(m.Instructions[6].Arg1)) != null
+				&& fieldref.Class == Name && fieldref.Signature == "Z"
+				&& (field = GetField(fieldref.Name, fieldref.Signature)) != null
+				&& field.IsStatic && field.IsFinal
+				&& !HasBranchIntoRegion(m.Instructions, 7, m.Instructions.Length, 0, 7)
+				&& !HasStaticFieldWrite(m.Instructions, 7, m.Instructions.Length, field)
+				&& !HasExceptionHandlerInRegion(m.ExceptionTable, 0, 7))
 			{
-				Field field = GetField("serialVersionUID", "J");
-				return field != null && field.IsStatic && field.IsFinal;
+				field.PatchConstantValue(true);
+				m.Instructions[0].PatchOpCode(NormalizedByteCode.__goto, 7);
+				flags |= FLAG_HAS_ASSERTIONS;
 			}
+		}
+
+		private bool IsDesiredAssertionStatusMethodref(int cpi)
+		{
+			ConstantPoolItemMethodref method = SafeGetMethodref(cpi) as ConstantPoolItemMethodref;
+			return method != null
+				&& method.Class == "java.lang.Class"
+				&& method.Name == "desiredAssertionStatus"
+				&& method.Signature == "()Z";
+		}
+
+		private static bool HasBranchIntoRegion(Method.Instruction[] instructions, int checkStart, int checkEnd, int regionStart, int regionEnd)
+		{
+			for (int i = checkStart; i < checkEnd; i++)
+			{
+				switch (instructions[i].NormalizedOpCode)
+				{
+					case NormalizedByteCode.__ifeq:
+					case NormalizedByteCode.__ifne:
+					case NormalizedByteCode.__iflt:
+					case NormalizedByteCode.__ifge:
+					case NormalizedByteCode.__ifgt:
+					case NormalizedByteCode.__ifle:
+					case NormalizedByteCode.__if_icmpeq:
+					case NormalizedByteCode.__if_icmpne:
+					case NormalizedByteCode.__if_icmplt:
+					case NormalizedByteCode.__if_icmpge:
+					case NormalizedByteCode.__if_icmpgt:
+					case NormalizedByteCode.__if_icmple:
+					case NormalizedByteCode.__if_acmpeq:
+					case NormalizedByteCode.__if_acmpne:
+					case NormalizedByteCode.__ifnull:
+					case NormalizedByteCode.__ifnonnull:
+					case NormalizedByteCode.__goto:
+					case NormalizedByteCode.__jsr:
+						if (instructions[i].TargetIndex > regionStart && instructions[i].TargetIndex < regionEnd)
+						{
+							return true;
+						}
+						break;
+					case NormalizedByteCode.__tableswitch:
+					case NormalizedByteCode.__lookupswitch:
+						if (instructions[i].DefaultTarget > regionStart && instructions[i].DefaultTarget < regionEnd)
+						{
+							return true;
+						}
+						for (int j = 0; j < instructions[i].SwitchEntryCount; j++)
+						{
+							if (instructions[i].GetSwitchTargetIndex(j) > regionStart && instructions[i].GetSwitchTargetIndex(j) < regionEnd)
+							{
+								return true;
+							}
+						}
+						break;
+				}
+			}
+			return false;
+		}
+
+		private bool HasStaticFieldWrite(Method.Instruction[] instructions, int checkStart, int checkEnd, Field field)
+		{
+			for (int i = checkStart; i < checkEnd; i++)
+			{
+				if (instructions[i].NormalizedOpCode == NormalizedByteCode.__putstatic)
+				{
+					ConstantPoolItemFieldref fieldref = SafeGetFieldref(instructions[i].Arg1);
+					if (fieldref != null && fieldref.Class == Name && fieldref.Name == field.Name && fieldref.Signature == field.Signature)
+					{
+						return true;
+					}
+				}
+			}
+			return false;
+		}
+
+		private static bool HasExceptionHandlerInRegion(Method.ExceptionTableEntry[] entries, int regionStart, int regionEnd)
+		{
+			for (int i = 0; i < entries.Length; i++)
+			{
+				if (entries[i].handlerIndex > regionStart && entries[i].handlerIndex < regionEnd)
+				{
+					return true;
+				}
+			}
+			return false;
 		}
 	}
 }

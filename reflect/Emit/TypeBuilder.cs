@@ -31,7 +31,7 @@ using IKVM.Reflection.Writer;
 
 namespace IKVM.Reflection.Emit
 {
-	public sealed class GenericTypeParameterBuilder : Type
+	public sealed class GenericTypeParameterBuilder : TypeInfo
 	{
 		private readonly string name;
 		private readonly TypeBuilder type;
@@ -42,7 +42,18 @@ namespace IKVM.Reflection.Emit
 		private Type baseType;
 		private GenericParameterAttributes attr;
 
-		internal GenericTypeParameterBuilder(string name, TypeBuilder type, MethodBuilder method, int position)
+		internal GenericTypeParameterBuilder(string name, TypeBuilder type, int position)
+			: this(name, type, null, position, Signature.ELEMENT_TYPE_VAR)
+		{
+		}
+
+		internal GenericTypeParameterBuilder(string name, MethodBuilder method, int position)
+			: this(name, null, method, position, Signature.ELEMENT_TYPE_MVAR)
+		{
+		}
+
+		private GenericTypeParameterBuilder(string name, TypeBuilder type, MethodBuilder method, int position, byte sigElementType)
+			: base(sigElementType)
 		{
 			this.name = name;
 			this.type = type;
@@ -111,11 +122,6 @@ namespace IKVM.Reflection.Emit
 			get { return ModuleBuilder; }
 		}
 
-		public override bool IsGenericParameter
-		{
-			get { return true; }
-		}
-
 		public override int GenericParameterPosition
 		{
 			get { return position; }
@@ -132,6 +138,11 @@ namespace IKVM.Reflection.Emit
 		}
 
 		public override Type[] GetGenericParameterConstraints()
+		{
+			throw new NotImplementedException();
+		}
+
+		public override CustomModifiers[] __GetGenericParameterConstraintCustomModifiers()
 		{
 			throw new NotImplementedException();
 		}
@@ -246,7 +257,7 @@ namespace IKVM.Reflection.Emit
 		}
 	}
 
-	public sealed class TypeBuilder : Type, ITypeOwner
+	public sealed class TypeBuilder : TypeInfo, ITypeOwner
 	{
 		public const int UnspecifiedTypeSize = 0;
 		private readonly ITypeOwner owner;
@@ -277,7 +288,7 @@ namespace IKVM.Reflection.Emit
 			this.name = name;
 			this.typeNameSpace = ns == null ? 0 : this.ModuleBuilder.Strings.Add(ns);
 			this.typeName = this.ModuleBuilder.Strings.Add(name);
-			MarkEnumOrValueType(ns, name);
+			MarkKnownType(ns, name);
 		}
 
 		public ConstructorBuilder DefineDefaultConstructor(MethodAttributes attributes)
@@ -397,6 +408,11 @@ namespace IKVM.Reflection.Emit
 			return DefineProperty(name, attributes, returnType, null, null, parameterTypes, null, null);
 		}
 
+		public PropertyBuilder DefineProperty(string name, PropertyAttributes attributes, CallingConventions callingConvention, Type returnType, Type[] parameterTypes)
+		{
+			return DefineProperty(name, attributes, callingConvention, returnType, null, null, parameterTypes, null, null);
+		}
+
 		public PropertyBuilder DefineProperty(string name, PropertyAttributes attributes, Type returnType, Type[] returnTypeRequiredCustomModifiers, Type[] returnTypeOptionalCustomModifiers,
 			Type[] parameterTypes, Type[][] parameterTypeRequiredCustomModifiers, Type[][] parameterTypeOptionalCustomModifiers)
 		{
@@ -481,7 +497,7 @@ namespace IKVM.Reflection.Emit
 			return DefineNestedType(name, attr, parent, packSize, 0);
 		}
 
-		private TypeBuilder DefineNestedType(string name, TypeAttributes attr, Type parent, PackingSize packSize, int typeSize)
+		public TypeBuilder DefineNestedType(string name, TypeAttributes attr, Type parent, PackingSize packSize, int typeSize)
 		{
 			string ns = null;
 			int lastdot = name.LastIndexOf('.');
@@ -551,7 +567,7 @@ namespace IKVM.Reflection.Emit
 		{
 			this.pack = (short)packingSize;
 			this.size = typesize;
-			this.hasLayout = true;
+			this.hasLayout = pack != 0 || size != 0;
 		}
 
 		private void SetStructLayoutPseudoCustomAttribute(CustomAttributeBuilder customBuilder)
@@ -566,12 +582,11 @@ namespace IKVM.Reflection.Emit
 			{
 				layout = (LayoutKind)val;
 			}
-			StructLayoutAttribute attr = new StructLayoutAttribute(layout);
-			attr.Pack = (int?)customBuilder.GetFieldValue("Pack") ?? 0;
-			attr.Size = (int?)customBuilder.GetFieldValue("Size") ?? 0;
-			attr.CharSet = customBuilder.GetFieldValue<CharSet>("CharSet") ?? CharSet.None;
+			pack = (short)((int?)customBuilder.GetFieldValue("Pack") ?? 0);
+			size = (int?)customBuilder.GetFieldValue("Size") ?? 0;
+			CharSet charSet = customBuilder.GetFieldValue<CharSet>("CharSet") ?? CharSet.None;
 			attribs &= ~TypeAttributes.LayoutMask;
-			switch (attr.Value)
+			switch (layout)
 			{
 				case LayoutKind.Auto:
 					attribs |= TypeAttributes.AutoLayout;
@@ -584,7 +599,7 @@ namespace IKVM.Reflection.Emit
 					break;
 			}
 			attribs &= ~TypeAttributes.StringFormatMask;
-			switch (attr.CharSet)
+			switch (charSet)
 			{
 				case CharSet.None:
 				case CharSet.Ansi:
@@ -597,8 +612,6 @@ namespace IKVM.Reflection.Emit
 					attribs |= TypeAttributes.UnicodeClass;
 					break;
 			}
-			pack = (short)attr.Pack;
-			size = attr.Size;
 			hasLayout = pack != 0 || size != 0;
 		}
 
@@ -609,31 +622,26 @@ namespace IKVM.Reflection.Emit
 
 		public void SetCustomAttribute(CustomAttributeBuilder customBuilder)
 		{
-			Universe u = this.ModuleBuilder.universe;
-			Type type = customBuilder.Constructor.DeclaringType;
-			if (type == u.System_Runtime_InteropServices_StructLayoutAttribute)
+			switch (customBuilder.KnownCA)
 			{
-				SetStructLayoutPseudoCustomAttribute(customBuilder.DecodeBlob(this.Assembly));
-			}
-			else if (type == u.System_SerializableAttribute)
-			{
-				attribs |= TypeAttributes.Serializable;
-			}
-			else if (type == u.System_Runtime_InteropServices_ComImportAttribute)
-			{
-				attribs |= TypeAttributes.Import;
-			}
-			else if (type == u.System_Runtime_CompilerServices_SpecialNameAttribute)
-			{
-				attribs |= TypeAttributes.SpecialName;
-			}
-			else
-			{
-				if (type == u.System_Security_SuppressUnmanagedCodeSecurityAttribute)
-				{
+				case KnownCA.StructLayoutAttribute:
+					SetStructLayoutPseudoCustomAttribute(customBuilder.DecodeBlob(this.Assembly));
+					break;
+				case KnownCA.SerializableAttribute:
+					attribs |= TypeAttributes.Serializable;
+					break;
+				case KnownCA.ComImportAttribute:
+					attribs |= TypeAttributes.Import;
+					break;
+				case KnownCA.SpecialNameAttribute:
+					attribs |= TypeAttributes.SpecialName;
+					break;
+				case KnownCA.SuppressUnmanagedCodeSecurityAttribute:
 					attribs |= TypeAttributes.HasSecurity;
-				}
-				this.ModuleBuilder.SetCustomAttribute(token, customBuilder);
+					goto default;
+				default:
+					this.ModuleBuilder.SetCustomAttribute(token, customBuilder);
+					break;
 			}
 		}
 
@@ -647,11 +655,13 @@ namespace IKVM.Reflection.Emit
 			declarativeSecurity.Add(customBuilder);
 		}
 
+#if !CORECLR
 		public void AddDeclarativeSecurity(System.Security.Permissions.SecurityAction securityAction, System.Security.PermissionSet permissionSet)
 		{
 			this.ModuleBuilder.AddDeclarativeSecurity(token, securityAction, permissionSet);
 			this.attribs |= TypeAttributes.HasSecurity;
 		}
+#endif
 
 		public GenericTypeParameterBuilder[] DefineGenericParameters(params string[] names)
 		{
@@ -659,7 +669,7 @@ namespace IKVM.Reflection.Emit
 			gtpb = new GenericTypeParameterBuilder[names.Length];
 			for (int i = 0; i < names.Length; i++)
 			{
-				gtpb[i] = new GenericTypeParameterBuilder(names[i], this, null, i);
+				gtpb[i] = new GenericTypeParameterBuilder(names[i], this, i);
 			}
 			return (GenericTypeParameterBuilder[])gtpb.Clone();
 		}
@@ -689,7 +699,7 @@ namespace IKVM.Reflection.Emit
 			return this;
 		}
 
-		public Type CreateType()
+		public TypeInfo CreateTypeInfo()
 		{
 			if ((typeFlags & TypeFlags.Baked) != 0)
 			{
@@ -711,7 +721,7 @@ namespace IKVM.Reflection.Emit
 				hasConstructor |= mb.IsSpecialName && mb.Name == ConstructorInfo.ConstructorName;
 				mb.Bake();
 			}
-			if (!hasConstructor && !IsModulePseudoType && !IsInterface && !IsValueType && !(IsAbstract && IsSealed))
+			if (!hasConstructor && !IsModulePseudoType && !IsInterface && !IsValueType && !(IsAbstract && IsSealed) && Universe.AutomaticallyProvideDefaultConstructor)
 			{
 				((MethodBuilder)DefineDefaultConstructor(MethodAttributes.Public).GetMethodInfo()).Bake();
 			}
@@ -738,6 +748,11 @@ namespace IKVM.Reflection.Emit
 				}
 			}
 			return new BakedType(this);
+		}
+
+		public Type CreateType()
+		{
+			return CreateTypeInfo();
 		}
 
 		internal void PopulatePropertyAndEventTables()
@@ -801,14 +816,9 @@ namespace IKVM.Reflection.Emit
 			}
 		}
 
-		public override string __Name
+		internal override TypeName TypeName
 		{
-			get { return name; }
-		}
-
-		public override string __Namespace
-		{
-			get { return ns; }
+			get { return new TypeName(ns, name); }
 		}
 
 		public override string Name
@@ -858,45 +868,6 @@ namespace IKVM.Reflection.Emit
 				}
 			}
 			return methods;
-		}
-
-		public override StructLayoutAttribute StructLayoutAttribute
-		{
-			get
-			{
-				LayoutKind layout;
-				switch (attribs & TypeAttributes.LayoutMask)
-				{
-					case TypeAttributes.ExplicitLayout:
-						layout = LayoutKind.Explicit;
-						break;
-					case TypeAttributes.SequentialLayout:
-						layout = LayoutKind.Sequential;
-						break;
-					default:
-						layout = LayoutKind.Auto;
-						break;
-				}
-				StructLayoutAttribute attr = new StructLayoutAttribute(layout);
-				attr.Pack = (ushort)pack;
-				attr.Size = size;
-				switch (attribs & TypeAttributes.StringFormatMask)
-				{
-					case TypeAttributes.AutoClass:
-						attr.CharSet = CharSet.Auto;
-						break;
-					case TypeAttributes.UnicodeClass:
-						attr.CharSet = CharSet.Unicode;
-						break;
-					case TypeAttributes.AnsiClass:
-						attr.CharSet = CharSet.Ansi;
-						break;
-					default:
-						attr.CharSet = CharSet.None;
-						break;
-				}
-				return attr;
-			}
 		}
 
 		public override Type DeclaringType
@@ -1101,7 +1072,7 @@ namespace IKVM.Reflection.Emit
 		}
 	}
 
-	sealed class BakedType : Type
+	sealed class BakedType : TypeInfo
 	{
 		internal BakedType(TypeBuilder typeBuilder)
 			: base(typeBuilder)
@@ -1118,14 +1089,9 @@ namespace IKVM.Reflection.Emit
 			get { return underlyingType.BaseType; }
 		}
 
-		public override string __Name
+		internal override TypeName TypeName
 		{
-			get { return underlyingType.__Name; }
-		}
-
-		public override string __Namespace
-		{
-			get { return underlyingType.__Namespace; }
+			get { return underlyingType.TypeName; }
 		}
 
 		public override string Name
@@ -1184,9 +1150,9 @@ namespace IKVM.Reflection.Emit
 			get { return underlyingType.DeclaringType; }
 		}
 
-		public override StructLayoutAttribute StructLayoutAttribute
+		public override bool __GetLayout(out int packingSize, out int typeSize)
 		{
-			get { return underlyingType.StructLayoutAttribute; }
+			return underlyingType.__GetLayout(out packingSize, out typeSize);
 		}
 
 		public override Type[] GetGenericArguments()

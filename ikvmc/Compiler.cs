@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2012 Jeroen Frijters
+  Copyright (C) 2002-2014 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -30,6 +30,7 @@ using ICSharpCode.SharpZipLib.Zip;
 using IKVM.Internal;
 using IKVM.Reflection;
 using IKVM.Reflection.Emit;
+using Type = IKVM.Reflection.Type;
 
 sealed class FatalCompilerErrorException : Exception
 {
@@ -149,6 +150,19 @@ sealed class FatalCompilerErrorException : Exception
 				return "CallerID.getCallerID() requires a HasCallerID annotation";
 			case IKVM.Internal.Message.UnableToResolveInterface:
 				return "Unable to resolve interface '{0}' on type '{1}'";
+			case IKVM.Internal.Message.MissingBaseType:
+				return "The base class or interface '{0}' in assembly '{1}' referenced by type '{2}' in '{3}' could not be resolved";
+			case IKVM.Internal.Message.MissingBaseTypeReference:
+				return "The type '{0}' is defined in an assembly that is not referenced. You must add a reference to assembly '{1}'";
+			case IKVM.Internal.Message.FileNotFound:
+				return "File not found: {0}";
+			case IKVM.Internal.Message.RuntimeMethodMissing:
+				return "Runtime method '{0}' not found";
+			case IKVM.Internal.Message.MapFileFieldNotFound:
+				return "Field '{0}' referenced in remap file was not found in class '{1}'";
+			case IKVM.Internal.Message.GhostInterfaceMethodMissing:
+				return "Remapped class '{0}' does not implement ghost interface method\n" + 
+					"\t({1}.{2}{3})";
 			default:
 				return "Missing Error Message. Please file a bug.";
 		}
@@ -159,13 +173,11 @@ sealed class IkvmcCompiler
 {
 	private bool nonleaf;
 	private string manifestMainClass;
-	private Dictionary<string, ClassItem> classes = new Dictionary<string, ClassItem>();
-	private Dictionary<string, List<ResourceItem>> resources = new Dictionary<string, List<ResourceItem>>();
 	private string defaultAssemblyName;
-	private List<string> classesToExclude = new List<string>();
 	private static bool time;
 	private static string runtimeAssembly;
 	private static bool nostdlib;
+	private static bool emitSymbols;
 	private static readonly List<string> libpaths = new List<string>();
 	internal static readonly AssemblyResolver resolver = new AssemblyResolver();
 
@@ -225,7 +237,18 @@ sealed class IkvmcCompiler
 		Tracer.EnableTraceForDebug();
 		try
 		{
-			return Compile(args);
+			try
+			{
+				return Compile(args);
+			}
+			catch (TypeInitializationException x)
+			{
+				if (x.InnerException is FatalCompilerErrorException)
+				{
+					throw x.InnerException;
+				}
+				throw;
+			}
 		}
 		catch (FatalCompilerErrorException x)
 		{
@@ -238,6 +261,10 @@ sealed class IkvmcCompiler
 			Console.Error.WriteLine("*** INTERNAL COMPILER ERROR ***");
 			Console.Error.WriteLine();
 			Console.Error.WriteLine("PLEASE FILE A BUG REPORT FOR IKVM.NET WHEN YOU SEE THIS MESSAGE");
+			Console.Error.WriteLine();
+			Console.Error.WriteLine(System.Reflection.Assembly.GetExecutingAssembly().FullName);
+			Console.Error.WriteLine(System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory());
+			Console.Error.WriteLine("{0} {1}-bit", Environment.Version, IntPtr.Size * 8);
 			Console.Error.WriteLine();
 			Console.Error.WriteLine(x);
 			return 2;
@@ -275,6 +302,7 @@ sealed class IkvmcCompiler
 		CompilerOptions toplevel = new CompilerOptions();
 		StaticCompiler.toplevel = toplevel;
 		comp.ParseCommandLine(argList.GetEnumerator(), targets, toplevel);
+		StaticCompiler.Init(emitSymbols);
 		resolver.Warning += loader_Warning;
 		resolver.Init(StaticCompiler.Universe, nostdlib, toplevel.unresolvedReferences, libpaths);
 		ResolveReferences(targets);
@@ -349,13 +377,13 @@ sealed class IkvmcCompiler
 				}
 				else
 				{
-					SetStrongNameKeyPair(ref options.keyPair, options.keyfile, true);
+					SetStrongNameKeyPair(ref options.keyPair, options.keyfile, null);
 				}
 			}
 			else if (options.keycontainer != null)
 			{
 				StrongNameKeyPair keyPair = null;
-				SetStrongNameKeyPair(ref keyPair, options.keycontainer, false);
+				SetStrongNameKeyPair(ref keyPair, null, options.keycontainer);
 				if (options.delaysign)
 				{
 					options.publicKey = keyPair.PublicKey;
@@ -368,15 +396,15 @@ sealed class IkvmcCompiler
 		}
 	}
 
-	internal static byte[] ReadAllBytes(string path)
+	internal static byte[] ReadAllBytes(FileInfo path)
 	{
 		try
 		{
-			return File.ReadAllBytes(path);
+			return File.ReadAllBytes(path.FullName);
 		}
 		catch (Exception x)
 		{
-			throw new FatalCompilerErrorException(Message.ErrorReadingFile, path, x.Message);
+			throw new FatalCompilerErrorException(Message.ErrorReadingFile, path.ToString(), x.Message);
 		}
 	}
 
@@ -494,6 +522,9 @@ sealed class IkvmcCompiler
 		Console.Error.WriteLine("-nostdlib                      Do not reference standard libraries");
 		Console.Error.WriteLine("-lib:<dir>                     Additional directories to search for references");
 		Console.Error.WriteLine("-highentropyva                 Enable high entropy ASLR");
+		Console.Error.WriteLine("-static                        Disable dynamic binding");
+		Console.Error.WriteLine("-assemblyattributes:<file>     Read assembly custom attributes from specified");
+		Console.Error.WriteLine("                               class file.");
 	}
 
 	void ParseCommandLine(IEnumerator<string> arglist, List<CompilerOptions> targets, CompilerOptions options)
@@ -516,15 +547,12 @@ sealed class IkvmcCompiler
 			{
 				if (!nonleaf)
 				{
-					ReadFiles(fileNames);
+					ReadFiles(options, fileNames);
 					nonleaf = true;
 				}
 				IkvmcCompiler nestedLevel = new IkvmcCompiler();
 				nestedLevel.manifestMainClass = manifestMainClass;
-				nestedLevel.classes = new Dictionary<string, ClassItem>(classes);
-				nestedLevel.resources = CompilerOptions.Copy(resources);
 				nestedLevel.defaultAssemblyName = defaultAssemblyName;
-				nestedLevel.classesToExclude = new List<string>(classesToExclude);
 				nestedLevel.ContinueParseCommandLine(arglist, targets, options.Copy());
 			}
 			else if(s == "}")
@@ -539,7 +567,7 @@ sealed class IkvmcCompiler
 			{
 				if(s.StartsWith("-out:"))
 				{
-					options.path = s.Substring(5);
+					options.path = GetFileInfo(s.Substring(5));
 				}
 				else if(s.StartsWith("-Xtrace:"))
 				{
@@ -681,10 +709,11 @@ sealed class IkvmcCompiler
 					catch(IOException)
 					{
 					}
+					bool found;
 					if(exists)
 					{
 						DirectoryInfo dir = new DirectoryInfo(spec);
-						Recurse(dir, dir, "*");
+						found = Recurse(options, dir, dir, "*");
 					}
 					else
 					{
@@ -693,11 +722,11 @@ sealed class IkvmcCompiler
 							DirectoryInfo dir = new DirectoryInfo(Path.GetDirectoryName(spec));
 							if(dir.Exists)
 							{
-								Recurse(dir, dir, Path.GetFileName(spec));
+								found = Recurse(options, dir, dir, Path.GetFileName(spec));
 							}
 							else
 							{
-								RecurseJar(spec);
+								found = RecurseJar(options, spec);
 							}
 						}
 						catch(PathTooLongException)
@@ -713,6 +742,10 @@ sealed class IkvmcCompiler
 							throw new FatalCompilerErrorException(Message.InvalidPath, spec);
 						}
 					}
+					if(!found)
+					{
+						throw new FatalCompilerErrorException(Message.FileNotFound, spec);
+					}
 				}
 				else if(s.StartsWith("-resource:"))
 				{
@@ -721,7 +754,8 @@ sealed class IkvmcCompiler
 					{
 						throw new FatalCompilerErrorException(Message.InvalidOptionSyntax, s);
 					}
-					AddResource(null, spec[0].TrimStart('/'), ReadAllBytes(spec[1]), null);
+					FileInfo fileInfo = GetFileInfo(spec[1]);
+					options.GetResourcesJar().Add(spec[0].TrimStart('/'), ReadAllBytes(fileInfo), fileInfo);
 				}
 				else if(s.StartsWith("-externalresource:"))
 				{
@@ -751,7 +785,7 @@ sealed class IkvmcCompiler
 				}
 				else if(s.StartsWith("-exclude:"))
 				{
-					ProcessExclusionFile(classesToExclude, s.Substring(9));
+					ProcessExclusionFile(ref options.classesToExclude, s.Substring(9));
 				}
 				else if(s.StartsWith("-version:"))
 				{
@@ -767,15 +801,15 @@ sealed class IkvmcCompiler
 				}
 				else if(s.StartsWith("-win32icon:"))
 				{
-					options.iconfile = s.Substring(11);
+					options.iconfile = GetFileInfo(s.Substring(11));
 				}
 				else if(s.StartsWith("-win32manifest:"))
 				{
-					options.manifestFile = s.Substring(15);
+					options.manifestFile = GetFileInfo(s.Substring(15));
 				}
 				else if(s.StartsWith("-keyfile:"))
 				{
-					options.keyfile = s.Substring(9);
+					options.keyfile = GetFileInfo(s.Substring(9));
 				}
 				else if(s.StartsWith("-key:"))
 				{
@@ -787,6 +821,7 @@ sealed class IkvmcCompiler
 				}
 				else if(s == "-debug")
 				{
+					emitSymbols = true;
 					options.codegenoptions |= CodeGenOptions.Debug;
 				}
 				else if(s.StartsWith("-srcpath:"))
@@ -795,7 +830,7 @@ sealed class IkvmcCompiler
 				}
 				else if(s.StartsWith("-remap:"))
 				{
-					options.remapfile = s.Substring(7);
+					options.remapfile = GetFileInfo(s.Substring(7));
 				}
 				else if(s == "-nostacktraceinfo")
 				{
@@ -803,7 +838,7 @@ sealed class IkvmcCompiler
 				}
 				else if(s == "-opt:fields")
 				{
-					options.removeUnusedFields = true;
+					options.codegenoptions |= CodeGenOptions.RemoveUnusedFields;
 				}
 				else if(s == "-compressresources")
 				{
@@ -924,10 +959,10 @@ sealed class IkvmcCompiler
 				}
 				else if(s.StartsWith("-writeSuppressWarningsFile:"))
 				{
-					options.writeSuppressWarningsFile = s.Substring(27);
+					options.writeSuppressWarningsFile = GetFileInfo(s.Substring(27));
 					try
 					{
-						File.Delete(options.writeSuppressWarningsFile);
+						options.writeSuppressWarningsFile.Delete();
 					}
 					catch(Exception x)
 					{
@@ -947,6 +982,31 @@ sealed class IkvmcCompiler
 				{
 					// Ignore. This is handled earlier.
 				}
+				else if(s == "-XX:+AllowNonVirtualCalls")
+				{
+					JVM.AllowNonVirtualCalls = true;
+				}
+				else if(s == "-static")
+				{
+					// we abuse -static to also enable support for NoRefEmit scenarios
+					options.codegenoptions |= CodeGenOptions.DisableDynamicBinding | CodeGenOptions.NoRefEmitHelpers;
+				}
+				else if(s == "-nojarstubs")	// undocumented temporary option to mitigate risk
+				{
+					options.nojarstubs = true;
+				}
+				else if(s.StartsWith("-assemblyattributes:", StringComparison.Ordinal))
+				{
+					ProcessAttributeAnnotationsClass(ref options.assemblyAttributeAnnotations, s.Substring(20));
+				}
+				else if(s == "-w4") // undocumented option to always warn if a class isn't found
+				{
+					options.warningLevelHigh = true;
+				}
+				else if(s == "-noparameterreflection") // undocumented option to compile core class libraries with, to disable MethodParameter attribute
+				{
+					options.noParameterReflection = true;
+				}
 				else
 				{
 					throw new FatalCompilerErrorException(Message.UnrecognizedOption, s);
@@ -965,10 +1025,10 @@ sealed class IkvmcCompiler
 		{
 			return;
 		}
-		ReadFiles(fileNames);
+		ReadFiles(options, fileNames);
 		if(options.assembly == null)
 		{
-			string basename = options.path == null ? defaultAssemblyName : new FileInfo(options.path).Name;
+			string basename = options.path == null ? defaultAssemblyName : options.path.Name;
 			if(basename == null)
 			{
 				throw new FatalCompilerErrorException(Message.NoOutputFileSpecified);
@@ -985,7 +1045,7 @@ sealed class IkvmcCompiler
 		}
 		if(options.path != null && options.guessFileKind)
 		{
-			if(options.path.ToLower().EndsWith(".dll"))
+			if(options.path.Extension.Equals(".dll", StringComparison.OrdinalIgnoreCase))
 			{
 				options.target = PEFileKinds.Dll;
 			}
@@ -996,13 +1056,41 @@ sealed class IkvmcCompiler
 			StaticCompiler.IssueMessage(options, Message.MainMethodFromManifest, manifestMainClass);
 			options.mainClass = manifestMainClass;
 		}
-		options.classes = classes;
-		options.resources = resources;
-		options.classesToExclude = classesToExclude.ToArray();
 		targets.Add(options);
 	}
 
-	private void ReadFiles(List<string> fileNames)
+	internal static FileInfo GetFileInfo(string path)
+	{
+		try
+		{
+			FileInfo fileInfo = new FileInfo(path);
+			if (fileInfo.Directory == null)
+			{
+				// this happens with an incorrect unc path (e.g. "\\foo\bar")
+				throw new FatalCompilerErrorException(Message.InvalidPath, path);
+			}
+			return fileInfo;
+		}
+		catch (ArgumentException)
+		{
+			throw new FatalCompilerErrorException(Message.InvalidPath, path);
+		}
+		catch (NotSupportedException)
+		{
+			throw new FatalCompilerErrorException(Message.InvalidPath, path);
+		}
+		catch (PathTooLongException)
+		{
+			throw new FatalCompilerErrorException(Message.PathTooLong, path);
+		}
+		catch (UnauthorizedAccessException)
+		{
+			// this exception does not appear to be possible
+			throw new FatalCompilerErrorException(Message.InvalidPath, path);
+		}
+	}
+
+	private void ReadFiles(CompilerOptions options, List<string> fileNames)
 	{
 		foreach (string fileName in fileNames)
 		{
@@ -1016,6 +1104,12 @@ sealed class IkvmcCompiler
 				{
 					// if the filename contains a wildcard (or any other invalid character), we ignore
 					// it as a potential default assembly name
+				}
+				catch (NotSupportedException)
+				{
+				}
+				catch (PathTooLongException)
+				{
 				}
 			}
 			string[] files = null;
@@ -1033,7 +1127,7 @@ sealed class IkvmcCompiler
 			{
 				foreach (string f in files)
 				{
-					ProcessFile(null, f);
+					ProcessFile(options, null, f);
 				}
 			}
 		}
@@ -1077,24 +1171,24 @@ sealed class IkvmcCompiler
 		return false;
 	}
 
-	static void SetStrongNameKeyPair(ref StrongNameKeyPair strongNameKeyPair, string fileNameOrKeyContainer, bool file)
+	static void SetStrongNameKeyPair(ref StrongNameKeyPair strongNameKeyPair, FileInfo keyFile, string keyContainer)
 	{
 		try
 		{
-			if (file)
+			if (keyFile != null)
 			{
-				strongNameKeyPair = new StrongNameKeyPair(File.ReadAllBytes(fileNameOrKeyContainer));
+				strongNameKeyPair = new StrongNameKeyPair(ReadAllBytes(keyFile));
 			}
 			else
 			{
-				strongNameKeyPair = new StrongNameKeyPair(fileNameOrKeyContainer);
+				strongNameKeyPair = new StrongNameKeyPair(keyContainer);
 			}
 			// FXBUG we explicitly try to access the public key force a check (the StrongNameKeyPair constructor doesn't validate the key)
 			if (strongNameKeyPair.PublicKey != null) { }
 		}
 		catch (Exception x)
 		{
-			throw new FatalCompilerErrorException(Message.InvalidStrongNameKeyPair, file ? "file" : "container", x.Message);
+			throw new FatalCompilerErrorException(Message.InvalidStrongNameKeyPair, keyFile != null ? "file" : "container", x.Message);
 		}
 	}
 
@@ -1109,7 +1203,7 @@ sealed class IkvmcCompiler
 				{
 					foreach (CompilerOptions peer in targets)
 					{
-						if (peer.assembly.Equals(reference, StringComparison.InvariantCultureIgnoreCase))
+						if (peer.assembly.Equals(reference, StringComparison.OrdinalIgnoreCase))
 						{
 							ArrayAppend(ref target.peerReferences, peer.assembly);
 							goto next_reference;
@@ -1123,6 +1217,40 @@ sealed class IkvmcCompiler
 				}
 			}
 		}
+		// verify that we didn't reference any secondary assemblies of a shared class loader group
+		foreach (CompilerOptions target in targets)
+		{
+			if (target.references != null)
+			{
+				foreach (Assembly asm in target.references)
+				{
+					Type forwarder = asm.GetType("__<MainAssembly>");
+					if (forwarder != null && forwarder.Assembly != asm)
+					{
+						StaticCompiler.IssueMessage(Message.NonPrimaryAssemblyReference, asm.Location, forwarder.Assembly.GetName().Name);
+					}
+				}
+			}
+		}
+		// add legacy references (from stub files)
+		foreach (CompilerOptions target in targets)
+		{
+			foreach (string assemblyName in target.legacyStubReferences.Keys)
+			{
+				ArrayAppend(ref target.references, resolver.LegacyLoad(new AssemblyName(assemblyName), null));
+			}
+		}
+		// now pre-load the secondary assemblies of any shared class loader groups
+		foreach (CompilerOptions target in targets)
+		{
+			if (target.references != null)
+			{
+				foreach (Assembly asm in target.references)
+				{
+					AssemblyClassLoader.PreloadExportedAssemblies(asm);
+				}
+			}
+		}
 	}
 
 	private static void ArrayAppend<T>(ref T[] array, T element)
@@ -1133,10 +1261,22 @@ sealed class IkvmcCompiler
 		}
 		else
 		{
-			T[] temp = new T[array.Length + 1];
-			Array.Copy(array, 0, temp, 0, array.Length);
-			temp[temp.Length - 1] = element;
-			array = temp;
+			array = ArrayUtil.Concat(array, element);
+		}
+	}
+
+	private static void ArrayAppend<T>(ref T[] array, T[] append)
+	{
+		if (array == null)
+		{
+			array = append;
+		}
+		else if (append != null)
+		{
+			T[] tmp = new T[array.Length + append.Length];
+			Array.Copy(array, tmp, array.Length);
+			Array.Copy(append, 0, tmp, array.Length, append.Length);
+			array = tmp;
 		}
 	}
 
@@ -1152,160 +1292,202 @@ sealed class IkvmcCompiler
 		return buf;
 	}
 
-	private void AddClassFile(ZipEntry zipEntry, string filename, byte[] buf, bool addResourceFallback, string jar)
+	private static bool EmitStubWarning(CompilerOptions options, byte[] buf)
 	{
+		ClassFile cf;
 		try
 		{
-			string name = ClassFile.GetClassName(buf, 0, buf.Length);
-			if(classes.ContainsKey(name))
+			cf = new ClassFile(buf, 0, buf.Length, "<unknown>", ClassFileParseOptions.None, null);
+		}
+		catch (ClassFormatError)
+		{
+			return false;
+		}
+		if (cf.IKVMAssemblyAttribute == null)
+		{
+			return false;
+		}
+		if (cf.IKVMAssemblyAttribute.StartsWith("[["))
+		{
+			Regex r = new Regex(@"\[([^\[\]]+)\]");
+			MatchCollection mc = r.Matches(cf.IKVMAssemblyAttribute);
+			foreach (Match m in mc)
 			{
-				StaticCompiler.IssueMessage(Message.DuplicateClassName, name);
-			}
-			else
-			{
-				ClassItem item;
-				item.data = buf;
-				item.path = zipEntry == null ? filename : null;
-				classes.Add(name, item);
+				options.legacyStubReferences[m.Groups[1].Value] = null;
+				StaticCompiler.IssueMessage(options, Message.StubsAreDeprecated, m.Groups[1].Value);
 			}
 		}
-		catch(ClassFormatError x)
+		else
 		{
-			if(addResourceFallback)
+			options.legacyStubReferences[cf.IKVMAssemblyAttribute] = null;
+			StaticCompiler.IssueMessage(options, Message.StubsAreDeprecated, cf.IKVMAssemblyAttribute);
+		}
+		return true;
+	}
+
+	private static bool IsExcludedOrStubLegacy(CompilerOptions options, ZipEntry ze, byte[] data)
+	{
+		if (ze.Name.EndsWith(".class", StringComparison.OrdinalIgnoreCase))
+		{
+			try
 			{
-				// not a class file, so we include it as a resource
-				// (IBM's db2os390/sqlj jars apparantly contain such files)
-				StaticCompiler.IssueMessage(Message.NotAClassFile, filename, x.Message);
-				AddResource(zipEntry, filename, buf, jar);
+				bool stub;
+				string name = ClassFile.GetClassName(data, 0, data.Length, out stub);
+				if (options.IsExcludedClass(name) || (stub && EmitStubWarning(options, data)))
+				{
+					// we use stubs to add references, but otherwise ignore them
+					return true;
+				}
 			}
-			else
+			catch (ClassFormatError)
 			{
-				StaticCompiler.IssueMessage(Message.ClassFormatError, filename, x.Message);
+			}
+		}
+		return false;
+	}
+
+	private void ProcessManifest(CompilerOptions options, ZipFile zf, ZipEntry ze)
+	{
+		if (manifestMainClass == null)
+		{
+			// read main class from manifest
+			// TODO find out if we can use other information from manifest
+			StreamReader rdr = new StreamReader(zf.GetInputStream(ze));
+			string line;
+			while ((line = rdr.ReadLine()) != null)
+			{
+				if (line.StartsWith("Main-Class: "))
+				{
+					line = line.Substring(12);
+					string continuation;
+					while ((continuation = rdr.ReadLine()) != null
+						&& continuation.StartsWith(" ", StringComparison.Ordinal))
+					{
+						line += continuation.Substring(1);
+					}
+					manifestMainClass = line.Replace('/', '.');
+					break;
+				}
 			}
 		}
 	}
 
-	private void ProcessZipFile(string file, Predicate<ZipEntry> filter)
+	private bool ProcessZipFile(CompilerOptions options, string file, Predicate<ZipEntry> filter)
 	{
-		string jar = Path.GetFileName(file);
-		ZipFile zf = new ZipFile(file);
 		try
 		{
-			foreach(ZipEntry ze in zf)
+			ZipFile zf = new ZipFile(file);
+			try
 			{
-				if(filter != null && !filter(ze))
+				bool found = false;
+				Jar jar = null;
+				foreach (ZipEntry ze in zf)
 				{
-					// skip
-				}
-				else if(ze.IsDirectory)
-				{
-					AddResource(ze, ze.Name, null, jar);
-				}
-				else if(ze.Name.ToLower().EndsWith(".class"))
-				{
-					AddClassFile(ze, ze.Name, ReadFromZip(zf, ze), true, jar);
-				}
-				else
-				{
-					// if it's not a class, we treat it as a resource and the manifest
-					// is examined to find the Main-Class
-					if(ze.Name == "META-INF/MANIFEST.MF" && manifestMainClass == null)
+					if (filter != null && !filter(ze))
 					{
-						// read main class from manifest
-						// TODO find out if we can use other information from manifest
-						StreamReader rdr = new StreamReader(zf.GetInputStream(ze));
-						string line;
-						while((line = rdr.ReadLine()) != null)
+						// skip
+					}
+					else
+					{
+						found = true;
+						byte[] data = ReadFromZip(zf, ze);
+						if (IsExcludedOrStubLegacy(options, ze, data))
 						{
-							if(line.StartsWith("Main-Class: "))
-							{
-								line = line.Substring(12);
-								string continuation;
-								while((continuation = rdr.ReadLine()) != null
-									&& continuation.StartsWith(" ", StringComparison.Ordinal))
-								{
-									line += continuation.Substring(1);
-								}
-								manifestMainClass = line.Replace('/', '.');
-								break;
-							}
+							continue;
+						}
+						if (jar == null)
+						{
+							jar = options.GetJar(zf);
+						}
+						jar.Add(ze, data);
+						if (ze.Name == "META-INF/MANIFEST.MF")
+						{
+							ProcessManifest(options, zf, ze);
 						}
 					}
-					AddResource(ze, ze.Name, ReadFromZip(zf, ze), jar);
 				}
+				// include empty zip file if it has a comment
+				if (!found && !string.IsNullOrEmpty(zf.ZipFileComment))
+				{
+					options.GetJar(zf);
+				}
+				return found;
+			}
+			finally
+			{
+				zf.Close();
 			}
 		}
-		finally
+		catch (ICSharpCode.SharpZipLib.SharpZipBaseException x)
 		{
-			zf.Close();
+			throw new FatalCompilerErrorException(Message.ErrorReadingFile, file, x.Message);
 		}
 	}
 
-	private void AddResource(ZipEntry zipEntry, string name, byte[] buf, string jar)
+	private void ProcessFile(CompilerOptions options, DirectoryInfo baseDir, string file)
 	{
-		List<ResourceItem> list;
-		if (!resources.TryGetValue(name, out list))
+		FileInfo fileInfo = GetFileInfo(file);
+		if (fileInfo.Extension.Equals(".jar", StringComparison.OrdinalIgnoreCase) || fileInfo.Extension.Equals(".zip", StringComparison.OrdinalIgnoreCase))
 		{
-			list = new List<ResourceItem>();
-			resources.Add(name, list);
+			ProcessZipFile(options, file, null);
 		}
-		ResourceItem item = new ResourceItem();
-		item.zipEntry = zipEntry;
-		item.data = buf;
-		item.jar = jar ?? "resources.jar";
-		list.Add(item);
-	}
-
-	private void ProcessFile(DirectoryInfo baseDir, string file)
-	{
-		switch(new FileInfo(file).Extension.ToLower())
+		else
 		{
-			case ".class":
-				AddClassFile(null, file, ReadAllBytes(file), false, null);
-				break;
-			case ".jar":
-			case ".zip":
+			if (fileInfo.Extension.Equals(".class", StringComparison.OrdinalIgnoreCase))
+			{
+				byte[] data = ReadAllBytes(fileInfo);
 				try
 				{
-					ProcessZipFile(file, null);
+					bool stub;
+					string name = ClassFile.GetClassName(data, 0, data.Length, out stub);
+					if (options.IsExcludedClass(name))
+					{
+						return;
+					}
+					if (stub && EmitStubWarning(options, data))
+					{
+						// we use stubs to add references, but otherwise ignore them
+						return;
+					}
+					options.GetClassesJar().Add(name.Replace('.', '/') + ".class", data, fileInfo);
+					return;
 				}
-				catch(ICSharpCode.SharpZipLib.SharpZipBaseException x)
+				catch (ClassFormatError x)
 				{
-					throw new FatalCompilerErrorException(Message.ErrorReadingFile, file, x.Message);
+					StaticCompiler.IssueMessage(Message.ClassFormatError, file, x.Message);
 				}
-				break;
-			default:
+			}
+			if (baseDir == null)
 			{
-				if(baseDir == null)
-				{
-					StaticCompiler.IssueMessage(Message.UnknownFileType, file);
-				}
-				else
-				{
-					// include as resource
-					// extract the resource name by chopping off the base directory
-					string name = file.Substring(baseDir.FullName.Length);
-					name = name.TrimStart(Path.DirectorySeparatorChar).Replace('\\', '/');
-					AddResource(null, name, ReadAllBytes(file), null);
-				}
-				break;
+				StaticCompiler.IssueMessage(Message.UnknownFileType, file);
+			}
+			else
+			{
+				// include as resource
+				// extract the resource name by chopping off the base directory
+				string name = file.Substring(baseDir.FullName.Length);
+				name = name.TrimStart(Path.DirectorySeparatorChar).Replace('\\', '/');
+				options.GetResourcesJar().Add(name, ReadAllBytes(fileInfo), fileInfo);
 			}
 		}
 	}
 
-	private void Recurse(DirectoryInfo baseDir, DirectoryInfo dir, string spec)
+	private bool Recurse(CompilerOptions options, DirectoryInfo baseDir, DirectoryInfo dir, string spec)
 	{
+		bool found = false;
 		foreach(FileInfo file in dir.GetFiles(spec))
 		{
-			ProcessFile(baseDir, file.FullName);
+			found = true;
+			ProcessFile(options, baseDir, file.FullName);
 		}
 		foreach(DirectoryInfo sub in dir.GetDirectories())
 		{
-			Recurse(baseDir, sub, spec);
+			found |= Recurse(options, baseDir, sub, spec);
 		}
+		return found;
 	}
 
-	private void RecurseJar(string path)
+	private bool RecurseJar(CompilerOptions options, string path)
 	{
 		string file = "";
 		for (; ; )
@@ -1320,22 +1502,22 @@ sealed class IkvmcCompiler
 			{
 				string pathFilter = Path.GetDirectoryName(file) + Path.DirectorySeparatorChar;
 				string fileFilter = "^" + Regex.Escape(Path.GetFileName(file)).Replace("\\*", ".*").Replace("\\?", ".") + "$";
-				ProcessZipFile(path, delegate(ZipEntry ze) {
+				return ProcessZipFile(options, path, delegate(ZipEntry ze) {
 					// MONOBUG Path.GetDirectoryName() doesn't normalize / to \ on Windows
 					string name = ze.Name.Replace('/', Path.DirectorySeparatorChar);
 					return (Path.GetDirectoryName(name) + Path.DirectorySeparatorChar).StartsWith(pathFilter)
 						&& Regex.IsMatch(Path.GetFileName(ze.Name), fileFilter);
 				});
-				return;
 			}
 		}
 	}
 
 	//This processes an exclusion file with a single regular expression per line
-	private static void ProcessExclusionFile(List<string> classesToExclude, String filename)
+	private static void ProcessExclusionFile(ref string[] classesToExclude, string filename)
 	{
 		try 
 		{
+			List<string> list = classesToExclude == null ? new List<string>() : new List<string>(classesToExclude);
 			using(StreamReader file = new StreamReader(filename))
 			{
 				String line;
@@ -1344,12 +1526,27 @@ sealed class IkvmcCompiler
 					line = line.Trim();
 					if(!line.StartsWith("//") && line.Length != 0)
 					{
-						classesToExclude.Add(line);
+						list.Add(line);
 					}
 				}
 			}
+			classesToExclude = list.ToArray();
 		} 
 		catch(Exception x) 
+		{
+			throw new FatalCompilerErrorException(Message.ErrorReadingFile, filename, x.Message);
+		}
+	}
+
+	private static void ProcessAttributeAnnotationsClass(ref object[] annotations, string filename)
+	{
+		try
+		{
+			byte[] buf = File.ReadAllBytes(filename);
+			ClassFile cf = new ClassFile(buf, 0, buf.Length, null, ClassFileParseOptions.None, null);
+			ArrayAppend(ref annotations, cf.Annotations);
+		}
+		catch (Exception x)
 		{
 			throw new FatalCompilerErrorException(Message.ErrorReadingFile, filename, x.Message);
 		}

@@ -46,7 +46,7 @@ namespace IKVM.Reflection.Reader
 
 		public override string Location
 		{
-			get { return location; }
+			get { return location ?? ""; }
 		}
 
 		public override AssemblyName GetName()
@@ -77,6 +77,37 @@ namespace IKVM.Reflection.Reader
 			}
 			name.HashAlgorithm = (AssemblyHashAlgorithm)rec.HashAlgId;
 			name.CodeBase = this.CodeBase;
+			PortableExecutableKinds peKind;
+			ImageFileMachine machine;
+			manifestModule.GetPEKind(out peKind, out machine);
+			switch (machine)
+			{
+				case ImageFileMachine.I386:
+					// FXBUG we copy the .NET bug that Preferred32Bit implies x86
+					if ((peKind & (PortableExecutableKinds.Required32Bit | PortableExecutableKinds.Preferred32Bit)) != 0)
+					{
+						name.ProcessorArchitecture = ProcessorArchitecture.X86;
+					}
+					else if ((rec.Flags & 0x70) == 0x70)
+					{
+						// it's a reference assembly
+						name.ProcessorArchitecture = ProcessorArchitecture.None;
+					}
+					else
+					{
+						name.ProcessorArchitecture = ProcessorArchitecture.MSIL;
+					}
+					break;
+				case ImageFileMachine.IA64:
+					name.ProcessorArchitecture = ProcessorArchitecture.IA64;
+					break;
+				case ImageFileMachine.AMD64:
+					name.ProcessorArchitecture = ProcessorArchitecture.Amd64;
+					break;
+				case ImageFileMachine.ARM:
+					name.ProcessorArchitecture = ProcessorArchitecture.Arm;
+					break;
+			}
 			name.RawFlags = (AssemblyNameFlags)rec.Flags;
 			return name;
 		}
@@ -169,7 +200,7 @@ namespace IKVM.Reflection.Reader
 
 		public override Module GetModule(string name)
 		{
-			if (name.Equals(manifestModule.ScopeName, StringComparison.InvariantCultureIgnoreCase))
+			if (name.Equals(manifestModule.ScopeName, StringComparison.OrdinalIgnoreCase))
 			{
 				return manifestModule;
 			}
@@ -185,7 +216,7 @@ namespace IKVM.Reflection.Reader
 		{
 			for (int i = 0; i < manifestModule.File.records.Length; i++)
 			{
-				if (name.Equals(manifestModule.GetString(manifestModule.File.records[i].Name), StringComparison.InvariantCultureIgnoreCase))
+				if (name.Equals(manifestModule.GetString(manifestModule.File.records[i].Name), StringComparison.OrdinalIgnoreCase))
 				{
 					return i;
 				}
@@ -199,13 +230,12 @@ namespace IKVM.Reflection.Reader
 			{
 				return externalModules[index];
 			}
-			// TODO add ModuleResolve event
-			string location = Path.Combine(Path.GetDirectoryName(this.location), manifestModule.GetString(manifestModule.File.records[index].Name));
-			return LoadModule(index, null, location);
+			return LoadModule(index, null, manifestModule.GetString(manifestModule.File.records[index].Name));
 		}
 
-		private Module LoadModule(int index, byte[] rawModule, string location)
+		private Module LoadModule(int index, byte[] rawModule, string name)
 		{
+			string location = name == null ? null : Path.Combine(Path.GetDirectoryName(this.location), name);
 			if ((manifestModule.File.records[index].Flags & ContainsNoMetaData) != 0)
 			{
 				return externalModules[index] = new ResourceModule(manifestModule, index, location);
@@ -214,9 +244,32 @@ namespace IKVM.Reflection.Reader
 			{
 				if (rawModule == null)
 				{
-					rawModule = File.ReadAllBytes(location);
+					try
+					{
+						rawModule = File.ReadAllBytes(location);
+					}
+					catch (FileNotFoundException)
+					{
+						if (resolvers != null)
+						{
+							ResolveEventArgs arg = new ResolveEventArgs(name, this);
+							foreach (ModuleResolveEventHandler resolver in resolvers)
+							{
+								Module module = resolver(this, arg);
+								if (module != null)
+								{
+									return module;
+								}
+							}
+						}
+						if (universe.MissingMemberResolution)
+						{
+							return externalModules[index] = new MissingModule(this, index);
+						}
+						throw;
+					}
 				}
-				return externalModules[index] = new ModuleReader(this, manifestModule.universe, new MemoryStream(rawModule), location);
+				return externalModules[index] = new ModuleReader(this, manifestModule.universe, new MemoryStream(rawModule), location, false);
 			}
 		}
 
@@ -259,9 +312,9 @@ namespace IKVM.Reflection.Reader
 			return manifestModule.__GetReferencedAssemblies();
 		}
 
-		public override AssemblyNameFlags __AssemblyFlags
+		protected override AssemblyNameFlags GetAssemblyFlags()
 		{
-			get { return (AssemblyNameFlags)manifestModule.AssemblyTable.records[0].Flags; }
+			return (AssemblyNameFlags)manifestModule.AssemblyTable.records[0].Flags;
 		}
 
 		internal string Name

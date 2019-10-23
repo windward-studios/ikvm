@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2008-2011 Jeroen Frijters
+  Copyright (C) 2008-2015 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -81,7 +81,8 @@ namespace IKVM.Reflection.Writer
 			moduleBuilder.ApplyUnmanagedExports(imageFileMachine);
 			moduleBuilder.FixupMethodBodyTokens();
 
-			moduleBuilder.ModuleTable.Add(0, moduleBuilder.Strings.Add(moduleBuilder.moduleName), moduleBuilder.Guids.Add(moduleBuilder.ModuleVersionId), 0, 0);
+			int moduleVersionIdIndex = moduleBuilder.Guids.Add(moduleBuilder.GetModuleVersionIdOrEmpty());
+			moduleBuilder.ModuleTable.Add(0, moduleBuilder.Strings.Add(moduleBuilder.moduleName), moduleVersionIdIndex, 0, 0);
 
 			if (moduleBuilder.UserStrings.IsEmpty)
 			{
@@ -105,8 +106,9 @@ namespace IKVM.Reflection.Writer
 					break;
 				case ImageFileMachine.ARM:
 					writer.Headers.FileHeader.Machine = IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_ARM;
-					writer.Headers.FileHeader.Characteristics |= IMAGE_FILE_HEADER.IMAGE_FILE_32BIT_MACHINE;
+					writer.Headers.FileHeader.Characteristics |= IMAGE_FILE_HEADER.IMAGE_FILE_32BIT_MACHINE | IMAGE_FILE_HEADER.IMAGE_FILE_LARGE_ADDRESS_AWARE;
 					writer.Headers.OptionalHeader.SizeOfStackReserve = moduleBuilder.GetStackReserve(0x100000);
+					writer.Headers.OptionalHeader.SectionAlignment = 0x1000;
 					break;
 				case ImageFileMachine.AMD64:
 					writer.Headers.FileHeader.Machine = IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_AMD64;
@@ -165,7 +167,7 @@ namespace IKVM.Reflection.Writer
 			{
 				cliHeader.Flags |= CliHeader.COMIMAGE_FLAGS_STRONGNAMESIGNED;
 			}
-			if (moduleBuilder.IsPseudoToken(entryPointToken))
+			if (ModuleBuilder.IsPseudoToken(entryPointToken))
 			{
 				entryPointToken = moduleBuilder.ResolvePseudoToken(entryPointToken);
 			}
@@ -211,8 +213,11 @@ namespace IKVM.Reflection.Writer
 				writer.Headers.OptionalHeader.DataDirectory[6].Size = code.DebugDirectoryLength;
 			}
 
+			// Set the PE File timestamp
+			writer.Headers.FileHeader.TimeDateStamp = moduleBuilder.GetTimeDateStamp();
+
 			// we need to start by computing the number of sections, because code.PointerToRawData depends on that
-			writer.Headers.FileHeader.NumberOfSections = 1;
+			writer.Headers.FileHeader.NumberOfSections = 2;
 
 			if (moduleBuilder.initializedData.Length != 0)
 			{
@@ -223,12 +228,6 @@ namespace IKVM.Reflection.Writer
 			if (resources != null)
 			{
 				// .rsrc
-				writer.Headers.FileHeader.NumberOfSections++;
-			}
-
-			if (imageFileMachine != ImageFileMachine.ARM)
-			{
-				// .reloc
 				writer.Headers.FileHeader.NumberOfSections++;
 			}
 
@@ -266,10 +265,7 @@ namespace IKVM.Reflection.Writer
 			SectionHeader reloc = new SectionHeader();
 			reloc.Name = ".reloc";
 			reloc.VirtualAddress = rsrc.VirtualAddress + writer.ToSectionAlignment(rsrc.VirtualSize);
-			if (imageFileMachine != ImageFileMachine.ARM)
-			{
-				reloc.VirtualSize = ((uint)moduleBuilder.unmanagedExports.Count + 1) * 12;
-			}
+			reloc.VirtualSize = code.PackRelocations();
 			reloc.PointerToRawData = rsrc.PointerToRawData + rsrc.SizeOfRawData;
 			reloc.SizeOfRawData = writer.ToFileAlignment(reloc.VirtualSize);
 			reloc.Characteristics = SectionHeader.IMAGE_SCN_MEM_READ | SectionHeader.IMAGE_SCN_CNT_INITIALIZED_DATA | SectionHeader.IMAGE_SCN_MEM_DISCARDABLE;
@@ -296,9 +292,9 @@ namespace IKVM.Reflection.Writer
 				// (i.e. there is an additional layer of indirection), so we add the offset to the pointer
 				writer.Headers.OptionalHeader.AddressOfEntryPoint = code.StartupStubRVA + 0x20;
 			}
-			else if (imageFileMachine != ImageFileMachine.ARM)
+			else
 			{
-				writer.Headers.OptionalHeader.AddressOfEntryPoint = code.StartupStubRVA;
+				writer.Headers.OptionalHeader.AddressOfEntryPoint = code.StartupStubRVA + writer.Thumb;
 			}
 
 			writer.WritePEHeaders();
@@ -317,7 +313,8 @@ namespace IKVM.Reflection.Writer
 			}
 
 			stream.Seek(text.PointerToRawData, SeekOrigin.Begin);
-			code.Write(mw, sdata.VirtualAddress);
+			uint guidHeapOffset;
+			code.Write(mw, sdata.VirtualAddress, out guidHeapOffset);
 
 			if (sdata.SizeOfRawData != 0)
 			{
@@ -340,17 +337,28 @@ namespace IKVM.Reflection.Writer
 			// file alignment
 			stream.SetLength(reloc.PointerToRawData + reloc.SizeOfRawData);
 
+			// if we don't have a guid, generate one based on the contents of the assembly
+			if (moduleBuilder.universe.Deterministic && moduleBuilder.GetModuleVersionIdOrEmpty() == Guid.Empty)
+			{
+				Guid guid = GenerateModuleVersionId(stream);
+				stream.Position = guidHeapOffset + (moduleVersionIdIndex - 1) * 16;
+				stream.Write(guid.ToByteArray(), 0, 16);
+				moduleBuilder.__SetModuleVersionId(guid);
+			}
+
 			// do the strong naming
 			if (keyPair != null)
 			{
 				StrongName(stream, keyPair, writer.HeaderSize, text.PointerToRawData, code.StrongNameSignatureRVA - text.VirtualAddress + text.PointerToRawData, code.StrongNameSignatureLength);
 			}
 
+#if !NO_SYMBOL_WRITER
 			if (moduleBuilder.symbolWriter != null)
 			{
 				moduleBuilder.WriteSymbolTokenMap();
 				moduleBuilder.symbolWriter.Close();
 			}
+#endif
 		}
 
 		private static int ComputeStrongNameSignatureLength(byte[] publicKey)
@@ -374,53 +382,55 @@ namespace IKVM.Reflection.Writer
 
 		private static void StrongName(Stream stream, StrongNameKeyPair keyPair, uint headerLength, uint textSectionFileOffset, uint strongNameSignatureFileOffset, uint strongNameSignatureLength)
 		{
-			SHA1Managed hash = new SHA1Managed();
-			using (CryptoStream cs = new CryptoStream(Stream.Null, hash, CryptoStreamMode.Write))
+			using (var hash = SHA1.Create())
 			{
-				stream.Seek(0, SeekOrigin.Begin);
-				byte[] buf = new byte[8192];
-				HashChunk(stream, cs, buf, (int)headerLength);
-				stream.Seek(textSectionFileOffset, SeekOrigin.Begin);
-				HashChunk(stream, cs, buf, (int)(strongNameSignatureFileOffset - textSectionFileOffset));
-				stream.Seek(strongNameSignatureLength, SeekOrigin.Current);
-				HashChunk(stream, cs, buf, (int)(stream.Length - (strongNameSignatureFileOffset + strongNameSignatureLength)));
-			}
-			using (RSA rsa = keyPair.CreateRSA())
-			{
-				RSAPKCS1SignatureFormatter sign = new RSAPKCS1SignatureFormatter(rsa);
-				byte[] signature = sign.CreateSignature(hash);
-				Array.Reverse(signature);
-				if (signature.Length != strongNameSignatureLength)
+				using (CryptoStream cs = new CryptoStream(Stream.Null, hash, CryptoStreamMode.Write))
 				{
-					throw new InvalidOperationException("Signature length mismatch");
+					stream.Seek(0, SeekOrigin.Begin);
+					byte[] buf = new byte[8192];
+					HashChunk(stream, cs, buf, (int)headerLength);
+					stream.Seek(textSectionFileOffset, SeekOrigin.Begin);
+					HashChunk(stream, cs, buf, (int)(strongNameSignatureFileOffset - textSectionFileOffset));
+					stream.Seek(strongNameSignatureLength, SeekOrigin.Current);
+					HashChunk(stream, cs, buf, (int)(stream.Length - (strongNameSignatureFileOffset + strongNameSignatureLength)));
 				}
-				stream.Seek(strongNameSignatureFileOffset, SeekOrigin.Begin);
-				stream.Write(signature, 0, signature.Length);
-			}
+				using (RSA rsa = keyPair.CreateRSA())
+				{
+					RSAPKCS1SignatureFormatter sign = new RSAPKCS1SignatureFormatter(rsa);
+					byte[] signature = sign.CreateSignature(hash);
+					Array.Reverse(signature);
+					if (signature.Length != strongNameSignatureLength)
+					{
+						throw new InvalidOperationException("Signature length mismatch");
+					}
+					stream.Seek(strongNameSignatureFileOffset, SeekOrigin.Begin);
+					stream.Write(signature, 0, signature.Length);
+				}
 
-			// compute the PE checksum
-			stream.Seek(0, SeekOrigin.Begin);
-			int count = (int)stream.Length / 4;
-			BinaryReader br = new BinaryReader(stream);
-			long sum = 0;
-			for (int i = 0; i < count; i++)
-			{
-				sum += br.ReadUInt32();
-				int carry = (int)(sum >> 32);
-				sum &= 0xFFFFFFFFU;
-				sum += carry;
-			}
-			while ((sum >> 16) != 0)
-			{
-				sum = (sum & 0xFFFF) + (sum >> 16);
-			}
-			sum += stream.Length;
+				// compute the PE checksum
+				stream.Seek(0, SeekOrigin.Begin);
+				int count = (int)stream.Length / 4;
+				BinaryReader br = new BinaryReader(stream);
+				long sum = 0;
+				for (int i = 0; i < count; i++)
+				{
+					sum += br.ReadUInt32();
+					int carry = (int)(sum >> 32);
+					sum &= 0xFFFFFFFFU;
+					sum += carry;
+				}
+				while ((sum >> 16) != 0)
+				{
+					sum = (sum & 0xFFFF) + (sum >> 16);
+				}
+				sum += stream.Length;
 
-			// write the PE checksum, note that it is always at offset 0xD8 in the file
-			ByteBuffer bb = new ByteBuffer(4);
-			bb.Write((int)sum);
-			stream.Seek(0xD8, SeekOrigin.Begin);
-			bb.WriteTo(stream);
+				// write the PE checksum, note that it is always at offset 0xD8 in the file
+				ByteBuffer bb = new ByteBuffer(4);
+				bb.Write((int)sum);
+				stream.Seek(0xD8, SeekOrigin.Begin);
+				bb.WriteTo(stream);
+			}
 		}
 
 		internal static void HashChunk(Stream stream, CryptoStream cs, byte[] buf, int length)
@@ -430,6 +440,27 @@ namespace IKVM.Reflection.Writer
 				int read = stream.Read(buf, 0, Math.Min(buf.Length, length));
 				cs.Write(buf, 0, read);
 				length -= read;
+			}
+		}
+
+		private static Guid GenerateModuleVersionId(Stream stream)
+		{
+			using (var hash = SHA1.Create())
+			{
+				using (CryptoStream cs = new CryptoStream(Stream.Null, hash, CryptoStreamMode.Write))
+				{
+					stream.Seek(0, SeekOrigin.Begin);
+					byte[] buf = new byte[8192];
+					HashChunk(stream, cs, buf, (int)stream.Length);
+				}
+				byte[] bytes = new byte[16];
+				Buffer.BlockCopy(hash.Hash, 0, bytes, 0, bytes.Length);
+				// set GUID type to "version 4" (random)
+				bytes[7] &= 0x0F;
+				bytes[7] |= 0x40;
+				bytes[8] &= 0x3F;
+				bytes[8] |= 0x80;
+				return new Guid(bytes);
 			}
 		}
 	}

@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2011 Jeroen Frijters
+  Copyright (C) 2002-2014 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -197,13 +197,14 @@ namespace IKVM.Internal
 				{
 					StackFrame frame = st.GetFrame(i);
 					MethodBase m = frame.GetMethod();
-					if (m == null || m.DeclaringType == null)
+					if (m == null)
 					{
 						continue;
 					}
 					Type type = m.DeclaringType;
 					if (cleanStackTrace &&
-						(typeof(MethodBase).IsAssignableFrom(type)
+						(type == null
+						|| typeof(MethodBase).IsAssignableFrom(type)
 						|| type == typeof(RuntimeMethodHandle)
 						|| (type == typeof(Throwable) && m.Name == "instancehelper_fillInStackTrace")
 						|| (m.Name == "ToJava" && typeof(RetargetableJavaException).IsAssignableFrom(type))
@@ -294,6 +295,18 @@ namespace IKVM.Internal
 			{
 				return "<clinit>";
 			}
+			else if(mb.Name.StartsWith(NamePrefix.DefaultMethod, StringComparison.Ordinal))
+			{
+				return mb.Name.Substring(NamePrefix.DefaultMethod.Length);
+			}
+			else if(mb.Name.StartsWith(NamePrefix.Bridge, StringComparison.Ordinal))
+			{
+				return mb.Name.Substring(NamePrefix.Bridge.Length);
+			}
+			else if(mb.IsSpecialName)
+			{
+				return UnicodeUtil.UnescapeInvalidSurrogates(mb.Name);
+			}
 			else
 			{
 				return mb.Name;
@@ -305,12 +318,17 @@ namespace IKVM.Internal
 #if FIRST_PASS
 			return false;
 #else
-			return NativeCode.sun.reflect.Reflection.IsHideFromJava(mb) || (mb.DeclaringType == typeof(ikvm.runtime.Util) && mb.Name == "mapException");
+			return (Java_sun_reflect_Reflection.GetHideFromJavaFlags(mb) & HideFromJavaFlags.StackTrace) != 0
+				|| (mb.DeclaringType == typeof(ikvm.runtime.Util) && mb.Name == "mapException");
 #endif
 		}
 
 		private static string getClassNameFromType(Type type)
 		{
+			if(type == null)
+			{
+				return "<Module>";
+			}
 			if(ClassLoaderWrapper.IsRemappedType(type))
 			{
 				return DotNetTypeWrapper.GetName(type);
@@ -322,6 +340,12 @@ namespace IKVM.Internal
 				{
 					return DotNetTypeWrapper.GetName(type);
 				}
+#if !FIRST_PASS
+				if(tw.IsUnsafeAnonymous)
+				{
+					return tw.ClassObject.getName();
+				}
+#endif
 				return tw.Name;
 			}
 			return type.FullName;
@@ -333,7 +357,7 @@ namespace IKVM.Internal
 			if(ilOffset != StackFrame.OFFSET_UNKNOWN)
 			{
 				MethodBase mb = frame.GetMethod();
-				if(mb != null)
+				if(mb != null && mb.DeclaringType != null)
 				{
 					if(ClassLoaderWrapper.IsRemappedType(mb.DeclaringType))
 					{
@@ -352,7 +376,7 @@ namespace IKVM.Internal
 		private static string GetFileName(StackFrame frame)
 		{
 			MethodBase mb = frame.GetMethod();
-			if(mb != null)
+			if(mb != null && mb.DeclaringType != null)
 			{
 				if(ClassLoaderWrapper.IsRemappedType(mb.DeclaringType))
 				{
@@ -553,11 +577,11 @@ namespace IKVM.Internal
 #if !FIRST_PASS
 			if (_this_cause != _this)
 			{
-				throw new java.lang.IllegalStateException("Can't overwrite cause");
+				throw new java.lang.IllegalStateException("Can't overwrite cause with " + java.util.Objects.toString(cause, "a null"), _this);
 			}
 			if (cause == _this)
 			{
-				throw new java.lang.IllegalArgumentException("Self-causation not permitted");
+				throw new java.lang.IllegalArgumentException("Self-causation not permitted", _this);
 			}
 #endif
 		}
@@ -569,7 +593,7 @@ namespace IKVM.Internal
 			{
 				if (_this == x)
 				{
-					throw new java.lang.IllegalArgumentException("Self-suppression not permitted");
+					throw new java.lang.IllegalArgumentException("Self-suppression not permitted", x);
 				}
 				if (x == null)
 				{

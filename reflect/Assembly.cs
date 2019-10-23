@@ -26,10 +26,13 @@ using System.Collections.Generic;
 
 namespace IKVM.Reflection
 {
+	public delegate Module ModuleResolveEventHandler(object sender, ResolveEventArgs e);
+
 	public abstract class Assembly : ICustomAttributeProvider
 	{
 		internal readonly Universe universe;
 		protected string fullName;	// AssemblyBuilder needs access to this field to clear it when the name changes
+		protected List<ModuleResolveEventHandler> resolvers;
 
 		internal Assembly(Universe universe)
 		{
@@ -39,6 +42,22 @@ namespace IKVM.Reflection
 		public sealed override string ToString()
 		{
 			return FullName;
+		}
+
+		public event ModuleResolveEventHandler ModuleResolve
+		{
+			add
+			{
+				if (resolvers == null)
+				{
+					resolvers = new List<ModuleResolveEventHandler>();
+				}
+				resolvers.Add(value);
+			}
+			remove
+			{
+				resolvers.Remove(value);
+			}
 		}
 
 		public abstract Type[] GetTypes();
@@ -61,9 +80,9 @@ namespace IKVM.Reflection
 		// The differences between ResolveType and FindType are:
 		// - ResolveType is only used when a type is assumed to exist (because another module's metadata claims it)
 		// - ResolveType can return a MissingType
-		internal Type ResolveType(TypeName typeName)
+		internal Type ResolveType(Module requester, TypeName typeName)
 		{
-			return FindType(typeName) ?? universe.GetMissingTypeOrThrow(this.ManifestModule, null, typeName);
+			return FindType(typeName) ?? universe.GetMissingTypeOrThrow(requester, this.ManifestModule, null, typeName);
 		}
 
 		public string FullName
@@ -74,6 +93,11 @@ namespace IKVM.Reflection
 		public Module[] GetModules()
 		{
 			return GetModules(true);
+		}
+
+		public IEnumerable<Module> Modules
+		{
+			get { return GetLoadedModules(); }
 		}
 
 		public Module[] GetLoadedModules()
@@ -102,6 +126,25 @@ namespace IKVM.Reflection
 				}
 			}
 			return list.ToArray();
+		}
+
+		public IEnumerable<Type> ExportedTypes
+		{
+			get { return GetExportedTypes(); }
+		}
+
+		public IEnumerable<TypeInfo> DefinedTypes
+		{
+			get
+			{
+				Type[] types = GetTypes();
+				TypeInfo[] typeInfos = new TypeInfo[types.Length];
+				for (int i = 0; i < types.Length; i++)
+				{
+					typeInfos[i] = types[i].GetTypeInfo();
+				}
+				return typeInfos;
+			}
 		}
 
 		public Type GetType(string name)
@@ -140,7 +183,7 @@ namespace IKVM.Reflection
 			{
 				throw new MissingAssemblyException((MissingAssembly)this);
 			}
-			return parser.Expand(type, this, throwOnError, name, false, ignoreCase);
+			return parser.Expand(type, this.ManifestModule, throwOnError, name, false, ignoreCase);
 		}
 
 		public virtual Module LoadModule(string moduleName, byte[] rawModule)
@@ -161,6 +204,16 @@ namespace IKVM.Reflection
 		public IList<CustomAttributeData> __GetCustomAttributes(Type attributeType, bool inherit)
 		{
 			return CustomAttributeData.__GetCustomAttributes(this, attributeType, inherit);
+		}
+
+		public IList<CustomAttributeData> GetCustomAttributesData()
+		{
+			return CustomAttributeData.GetCustomAttributes(this);
+		}
+
+		public IEnumerable<CustomAttributeData> CustomAttributes
+		{
+			get { return GetCustomAttributesData(); }
 		}
 
 		public static string CreateQualifiedName(string assemblyName, string typeName)
@@ -186,14 +239,24 @@ namespace IKVM.Reflection
 			}
 		}
 
+		public virtual bool IsDynamic
+		{
+			get { return false; }
+		}
+
 		public virtual bool __IsMissing
 		{
 			get { return false; }
 		}
 
-		public virtual AssemblyNameFlags __AssemblyFlags
+		public AssemblyNameFlags __AssemblyFlags
 		{
-			get { return GetName().Flags; }
+			get { return GetAssemblyFlags(); }
+		}
+
+		protected virtual AssemblyNameFlags GetAssemblyFlags()
+		{
+			return GetName().Flags;
 		}
 
 		internal abstract IList<CustomAttributeData> GetCustomAttributesData(Type attributeType);

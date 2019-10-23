@@ -27,7 +27,7 @@ using System.Text;
 
 namespace IKVM.Reflection.Emit
 {
-	public sealed class EnumBuilder : Type
+	public sealed class EnumBuilder : TypeInfo
 	{
 		private readonly TypeBuilder typeBuilder;
 		private readonly FieldBuilder fieldBuilder;
@@ -39,14 +39,9 @@ namespace IKVM.Reflection.Emit
 			this.fieldBuilder = fieldBuilder;
 		}
 
-		public override string __Name
+		internal override TypeName TypeName
 		{
-			get { return typeBuilder.__Name; }
-		}
-
-		public override string __Namespace
-		{
-			get { return typeBuilder.__Namespace; }
+			get { return typeBuilder.TypeName; }
 		}
 
 		public override string Name
@@ -84,6 +79,11 @@ namespace IKVM.Reflection.Emit
 		public Type CreateType()
 		{
 			return typeBuilder.CreateType();
+		}
+
+		public TypeInfo CreateTypeInfo()
+		{
+			return typeBuilder.CreateTypeInfo();
 		}
 
 		public TypeToken TypeToken

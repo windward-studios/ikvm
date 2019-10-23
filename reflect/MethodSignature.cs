@@ -441,6 +441,24 @@ namespace IKVM.Reflection
 			return new PackedCustomModifiers(expanded);
 		}
 
+		internal bool ContainsMissingType
+		{
+			get
+			{
+				if (customModifiers != null)
+				{
+					for (int i = 0; i < customModifiers.Length; i++)
+					{
+						if (customModifiers[i].ContainsMissingType)
+						{
+							return true;
+						}
+					}
+				}
+				return false;
+			}
+		}
+
 		// this method make a copy of the incoming arrays (where necessary) and returns a normalized modifiers array
 		internal static PackedCustomModifiers CreateFromExternal(Type[] returnOptional, Type[] returnRequired, Type[][] parameterOptional, Type[][] parameterRequired, int parameterCount)
 		{

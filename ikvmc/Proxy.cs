@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2011 Jeroen Frijters
+  Copyright (C) 2011-2014 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -23,6 +23,7 @@
 */
 using System;
 using System.Collections.Generic;
+using IKVM.Attributes;
 using IKVM.Reflection;
 using IKVM.Reflection.Emit;
 using Type = IKVM.Reflection.Type;
@@ -143,6 +144,7 @@ namespace IKVM.Internal
 					// Check for duplicates
 					if (!MethodExists(methods, mw))
 					{
+						mw.Link();
 						methods.Add(mw);
 					}
 				}
@@ -220,9 +222,20 @@ namespace IKVM.Internal
 
 		private static void CreateNoFail(CompilerClassLoader loader, TypeWrapper[] interfaces, List<ProxyMethod> methods)
 		{
+			bool ispublic = true;
+			Type[] interfaceTypes = new Type[interfaces.Length];
+			for (int i = 0; i < interfaceTypes.Length; i++)
+			{
+				ispublic &= interfaces[i].IsPublic;
+				interfaceTypes[i] = interfaces[i].TypeAsBaseType;
+			}
+			TypeAttributes attr = TypeAttributes.Class | TypeAttributes.Sealed;
+			attr |= ispublic ? TypeAttributes.NestedPublic : TypeAttributes.NestedAssembly;
 			DynamicClassLoader factory = (DynamicClassLoader)loader.GetTypeWrapperFactory();
-			TypeBuilder tb = factory.DefineProxy(proxyClass, interfaces);
+			TypeBuilder tb = factory.DefineProxy(TypeNameUtil.GetProxyNestedName(interfaces), attr, proxyClass.TypeAsBaseType, interfaceTypes);
 			AttributeHelper.SetImplementsAttribute(tb, interfaces);
+			// we apply an InnerClass attribute to avoid the CompiledTypeWrapper heuristics for figuring out the modifiers
+			AttributeHelper.SetInnerClass(tb, null, ispublic ? Modifiers.Public | Modifiers.Final : Modifiers.Final);
 			CreateConstructor(tb);
 			for (int i = 0; i < methods.Count; i++)
 			{
@@ -232,13 +245,12 @@ namespace IKVM.Internal
 			{
 				CreateMethod(loader, tb, method);
 			}
-			CreateStaticInitializer(tb, methods);
+			CreateStaticInitializer(tb, methods, loader);
 		}
 
 		private static void CreateConstructor(TypeBuilder tb)
 		{
-			ConstructorBuilder cb = tb.DefineConstructor(MethodAttributes.Public, CallingConventions.Standard, new Type[] { invocationHandlerClass.TypeAsSignatureType });
-			CodeEmitter ilgen = CodeEmitter.Create(cb);
+			CodeEmitter ilgen = CodeEmitter.Create(ReflectUtil.DefineConstructor(tb, MethodAttributes.Public, new Type[] { invocationHandlerClass.TypeAsSignatureType }));
 			ilgen.Emit(OpCodes.Ldarg_0);
 			ilgen.Emit(OpCodes.Ldarg_1);
 			proxyConstructor.EmitCall(ilgen);
@@ -298,7 +310,7 @@ namespace IKVM.Internal
 				}
 				else if (returnType.IsPrimitive)
 				{
-					Boxer.EmitUnbox(ilgen, returnType);
+					Boxer.EmitUnbox(ilgen, returnType, true);
 				}
 				else if (returnType != CoreClasses.java.lang.Object.Wrapper)
 				{
@@ -316,15 +328,15 @@ namespace IKVM.Internal
 			ilgen.Emit(OpCodes.Stloc, exception);
 			CodeEmitterLabel rethrow = ilgen.DefineLabel();
 			ilgen.Emit(OpCodes.Ldloc, exception);
-			errorClass.EmitInstanceOf(null, ilgen);
+			errorClass.EmitInstanceOf(ilgen);
 			ilgen.EmitBrtrue(rethrow);
 			ilgen.Emit(OpCodes.Ldloc, exception);
-			runtimeExceptionClass.EmitInstanceOf(null, ilgen);
+			runtimeExceptionClass.EmitInstanceOf(ilgen);
 			ilgen.EmitBrtrue(rethrow);
 			foreach (TypeWrapper tw in pm.exceptions)
 			{
 				ilgen.Emit(OpCodes.Ldloc, exception);
-				tw.EmitInstanceOf(null, ilgen);
+				tw.EmitInstanceOf(ilgen);
 				ilgen.EmitBrtrue(rethrow);
 			}
 			ilgen.Emit(OpCodes.Ldloc, exception);
@@ -342,10 +354,9 @@ namespace IKVM.Internal
 			ilgen.DoEmit();
 		}
 
-		private static void CreateStaticInitializer(TypeBuilder tb, List<ProxyMethod> methods)
+		private static void CreateStaticInitializer(TypeBuilder tb, List<ProxyMethod> methods, CompilerClassLoader loader)
 		{
-			ConstructorBuilder cb = tb.DefineConstructor(MethodAttributes.Static, CallingConventions.Standard, Type.EmptyTypes);
-			CodeEmitter ilgen = CodeEmitter.Create(cb);
+			CodeEmitter ilgen = CodeEmitter.Create(ReflectUtil.DefineTypeInitializer(tb, loader));
 			CodeEmitterLocal callerID = ilgen.DeclareLocal(CoreClasses.ikvm.@internal.CallerID.Wrapper.TypeAsSignatureType);
 			TypeBuilder tbCallerID = DynamicTypeWrapper.FinishContext.EmitCreateCallerID(tb, ilgen);
 			ilgen.Emit(OpCodes.Stloc, callerID);
@@ -403,7 +414,10 @@ namespace IKVM.Internal
 			Dictionary<string, MethodWrapper> methods = new Dictionary<string, MethodWrapper>();
 			foreach (MethodWrapper mw in tw.GetMethods())
 			{
-				methods.Add(mw.Name + mw.Signature, mw);
+				if (mw.IsVirtual)
+				{
+					methods.Add(mw.Name + mw.Signature, mw);
+				}
 			}
 			foreach (TypeWrapper iface in tw.Interfaces)
 			{
@@ -437,167 +451,6 @@ namespace IKVM.Internal
 			internal ProxyException(string msg)
 				: base(msg)
 			{
-			}
-		}
-	}
-
-	static class Boxer
-	{
-		private static readonly TypeWrapper javaLangByte;
-		private static readonly MethodWrapper byteValue;
-		private static readonly MethodWrapper valueOfByte;
-		private static readonly TypeWrapper javaLangBoolean;
-		private static readonly MethodWrapper booleanValue;
-		private static readonly MethodWrapper valueOfBoolean;
-		private static readonly TypeWrapper javaLangShort;
-		private static readonly MethodWrapper shortValue;
-		private static readonly MethodWrapper valueOfShort;
-		private static readonly TypeWrapper javaLangCharacter;
-		private static readonly MethodWrapper charValue;
-		private static readonly MethodWrapper valueOfCharacter;
-		private static readonly TypeWrapper javaLangInteger;
-		private static readonly MethodWrapper intValue;
-		private static readonly MethodWrapper valueOfInteger;
-		private static readonly TypeWrapper javaLangFloat;
-		private static readonly MethodWrapper floatValue;
-		private static readonly MethodWrapper valueOfFloat;
-		private static readonly TypeWrapper javaLangLong;
-		private static readonly MethodWrapper longValue;
-		private static readonly MethodWrapper valueOfLong;
-		private static readonly TypeWrapper javaLangDouble;
-		private static readonly MethodWrapper doubleValue;
-		private static readonly MethodWrapper valueOfDouble;
-
-		static Boxer()
-		{
-			ClassLoaderWrapper bootClassLoader = ClassLoaderWrapper.GetBootstrapClassLoader();
-			javaLangByte = bootClassLoader.LoadClassByDottedNameFast("java.lang.Byte");
-			byteValue = javaLangByte.GetMethodWrapper("byteValue", "()B", false);
-			byteValue.Link();
-			valueOfByte = javaLangByte.GetMethodWrapper("valueOf", "(B)Ljava.lang.Byte;", false);
-			valueOfByte.Link();
-			javaLangBoolean = bootClassLoader.LoadClassByDottedNameFast("java.lang.Boolean");
-			booleanValue = javaLangBoolean.GetMethodWrapper("booleanValue", "()Z", false);
-			booleanValue.Link();
-			valueOfBoolean = javaLangBoolean.GetMethodWrapper("valueOf", "(Z)Ljava.lang.Boolean;", false);
-			valueOfBoolean.Link();
-			javaLangShort = bootClassLoader.LoadClassByDottedNameFast("java.lang.Short");
-			shortValue = javaLangShort.GetMethodWrapper("shortValue", "()S", false);
-			shortValue.Link();
-			valueOfShort = javaLangShort.GetMethodWrapper("valueOf", "(S)Ljava.lang.Short;", false);
-			valueOfShort.Link();
-			javaLangCharacter = bootClassLoader.LoadClassByDottedNameFast("java.lang.Character");
-			charValue = javaLangCharacter.GetMethodWrapper("charValue", "()C", false);
-			charValue.Link();
-			valueOfCharacter = javaLangCharacter.GetMethodWrapper("valueOf", "(C)Ljava.lang.Character;", false);
-			valueOfCharacter.Link();
-			javaLangInteger = bootClassLoader.LoadClassByDottedNameFast("java.lang.Integer");
-			intValue = javaLangInteger.GetMethodWrapper("intValue", "()I", false);
-			intValue.Link();
-			valueOfInteger = javaLangInteger.GetMethodWrapper("valueOf", "(I)Ljava.lang.Integer;", false);
-			valueOfInteger.Link();
-			javaLangFloat = bootClassLoader.LoadClassByDottedNameFast("java.lang.Float");
-			floatValue = javaLangFloat.GetMethodWrapper("floatValue", "()F", false);
-			floatValue.Link();
-			valueOfFloat = javaLangFloat.GetMethodWrapper("valueOf", "(F)Ljava.lang.Float;", false);
-			valueOfFloat.Link();
-			javaLangLong = bootClassLoader.LoadClassByDottedNameFast("java.lang.Long");
-			longValue = javaLangLong.GetMethodWrapper("longValue", "()J", false);
-			longValue.Link();
-			valueOfLong = javaLangLong.GetMethodWrapper("valueOf", "(J)Ljava.lang.Long;", false);
-			valueOfLong.Link();
-			javaLangDouble = bootClassLoader.LoadClassByDottedNameFast("java.lang.Double");
-			doubleValue = javaLangDouble.GetMethodWrapper("doubleValue", "()D", false);
-			doubleValue.Link();
-			valueOfDouble = javaLangDouble.GetMethodWrapper("valueOf", "(D)Ljava.lang.Double;", false);
-			valueOfDouble.Link();
-		}
-
-		internal static void EmitUnbox(CodeEmitter ilgen, TypeWrapper tw)
-		{
-			if (tw == PrimitiveTypeWrapper.BYTE)
-			{
-				javaLangByte.EmitCheckcast(null, ilgen);
-				byteValue.EmitCall(ilgen);
-			}
-			else if (tw == PrimitiveTypeWrapper.BOOLEAN)
-			{
-				javaLangBoolean.EmitCheckcast(null, ilgen);
-				booleanValue.EmitCall(ilgen);
-			}
-			else if (tw == PrimitiveTypeWrapper.SHORT)
-			{
-				javaLangShort.EmitCheckcast(null, ilgen);
-				shortValue.EmitCall(ilgen);
-			}
-			else if (tw == PrimitiveTypeWrapper.CHAR)
-			{
-				javaLangCharacter.EmitCheckcast(null, ilgen);
-				charValue.EmitCall(ilgen);
-			}
-			else if (tw == PrimitiveTypeWrapper.INT)
-			{
-				javaLangInteger.EmitCheckcast(null, ilgen);
-				intValue.EmitCall(ilgen);
-			}
-			else if (tw == PrimitiveTypeWrapper.FLOAT)
-			{
-				javaLangFloat.EmitCheckcast(null, ilgen);
-				floatValue.EmitCall(ilgen);
-			}
-			else if (tw == PrimitiveTypeWrapper.LONG)
-			{
-				javaLangLong.EmitCheckcast(null, ilgen);
-				longValue.EmitCall(ilgen);
-			}
-			else if (tw == PrimitiveTypeWrapper.DOUBLE)
-			{
-				javaLangDouble.EmitCheckcast(null, ilgen);
-				doubleValue.EmitCall(ilgen);
-			}
-			else
-			{
-				throw new InvalidOperationException();
-			}
-		}
-
-		internal static void EmitBox(CodeEmitter ilgen, TypeWrapper tw)
-		{
-			if (tw == PrimitiveTypeWrapper.BYTE)
-			{
-				valueOfByte.EmitCall(ilgen);
-			}
-			else if (tw == PrimitiveTypeWrapper.BOOLEAN)
-			{
-				valueOfBoolean.EmitCall(ilgen);
-			}
-			else if (tw == PrimitiveTypeWrapper.SHORT)
-			{
-				valueOfShort.EmitCall(ilgen);
-			}
-			else if (tw == PrimitiveTypeWrapper.CHAR)
-			{
-				valueOfCharacter.EmitCall(ilgen);
-			}
-			else if (tw == PrimitiveTypeWrapper.INT)
-			{
-				valueOfInteger.EmitCall(ilgen);
-			}
-			else if (tw == PrimitiveTypeWrapper.FLOAT)
-			{
-				valueOfFloat.EmitCall(ilgen);
-			}
-			else if (tw == PrimitiveTypeWrapper.LONG)
-			{
-				valueOfLong.EmitCall(ilgen);
-			}
-			else if (tw == PrimitiveTypeWrapper.DOUBLE)
-			{
-				valueOfDouble.EmitCall(ilgen);
-			}
-			else
-			{
-				throw new InvalidOperationException();
 			}
 		}
 	}
