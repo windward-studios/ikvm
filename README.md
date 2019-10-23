@@ -11,7 +11,6 @@
 
  + Add JDK tools like javac, javah, javap, etc...
  + Play Minecraft with this IKVM.NET fork
- + Rename to OpenJDK.NET - the OpenJDK port for Microsoft.NET
 
 ## Build
 
@@ -23,7 +22,7 @@ step 3: run build.bat
 
 NOTE: The built-in NANT tool may not work if you extract using windows explorer's built-in ZIP extractor due to some stupid security measures. You may need to unblock the archive in properties or extract using 7-zip.
 
-If you hate building or can't build, don't worry, you will still experience the Java Virtual Machine made in C#, the cute-looking Jessie Lesbian had built all of this herself.
+If you hate building or can't build, don't worry, you will still experience the Java Virtual Machine made in C#. The cute-looking Jessie Lesbian had built all of this herself just in case you don't want to or can't build.
 
 [download](https://github.com/jessielesbian/ikvm/releases/download/8.5.0.3/ikvm_8.5.0.3_bin_windows.zip)
 
