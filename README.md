@@ -6,10 +6,11 @@
  + Prebuilt classpath
  + Easy to use build script
  + Official builds
+ + Add JDK tools like javac, javah, javap, etc...
 
 ## List of things Jessie Lesbian want to do
 
- + Add JDK tools like javac, javah, javap, etc...
+ + Fully support Swing and AWT
  + Play Minecraft with this IKVM.NET fork
 
 ## Build
@@ -24,6 +25,10 @@ NOTE: The built-in NANT tool may not work if you extract using windows explorer'
 
 If you hate building or can't build, don't worry, you will still experience the Java Virtual Machine made in C#. The cute-looking Jessie Lesbian had built all of this herself just in case you don't want to or can't build.
 
-[download](https://github.com/jessielesbian/ikvm/releases/download/8.5.0.3/ikvm_8.5.0.3_bin_windows.zip)
+[download](https://github.com/jessielesbian/ikvm/releases/download/8.5.0.3b2/ikvm_8.5.0.3b2_bin_windows.zip)
 
 If you have a problem or an opinion, please send me an email. My email is jessielesbian@protonmail.com.
+
+## About OpenJDK.NET: The OpenJDK port for Microsoft.NET made by Jessie Lesbian
+
+OpenJDK.NET is an OpenJDK port for Microsoft.NET made by Jessie Lesbian. It contains 6 JDK tools: javac, javah, javap, jar, native2ascii, and rmic. It is currently an experimental feature and may not work.
