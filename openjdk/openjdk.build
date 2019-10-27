@@ -245,12 +245,9 @@
         	<arg value="-assemblyattributes:commonAttributes.class"/>
             <arg value="-version:${VERSION}" />
             <arg value="${signoption}" />
-            <arg value="-compressresources" />
-            <arg value="-opt:fields" />
             <arg value="-strictfinalfieldsemantics" />
-            <arg value="-removeassertions" />
             <arg value="-target:library" />
-            <arg value="-sharedclassloader" />
+            <arg value="-sharedclassloader"/>
             <arg value="-r:mscorlib.dll" />
             <arg value="-r:System.dll" />
             <arg value="-r:System.Core.dll" unless="${SkipSystemCoreDependency}" />
@@ -260,9 +257,15 @@
             <arg value="-nowarn:110" />
             <arg value="-w4" />
             <arg value="-warnaserror" />
-            <!-- avoid reflection since it's slow and Jessie Lesbian had waiting difficulties. -->
+            <!-- we need optimizations since Jessie Lesbian had waiting difficulties. -->
+            <arg value="-removeassertions" />
+            <arg value="-compressresources" />
+            <arg value="-opt:fields" />
             <arg value="-static"/>
             <arg value="-noparameterreflection" />
+            <arg value="-nostacktraceinfo"/>
+            <arg value="-filealign:4096"/>
+            <arg value="-noautoserialization"/>
             <arg value="@response.gen.txt" />
         </exec>
         <if test="${property::exists('peverify')}">
@@ -290,16 +293,15 @@
             <exec program="${peverify}" commandline="-nologo IKVM.OpenJDK.XML.Transform.dll" />
             <exec program="${peverify}" commandline="-nologo IKVM.OpenJDK.XML.WebServices.dll" />
             <exec program="${peverify}" commandline="-nologo IKVM.OpenJDK.XML.XPath.dll" />
+            <exec program="${peverify}" commandline="-nologo IKVM.OpenJDK.Tools.dll" />
         </if>
-	<!-- make sure that we haven't accidentally introduced new dependencies -->
-        <exec program="${project::get-base-directory()}/../tools/depcheck.exe" commandline="response.txt dependencies.txt" useruntimeengine="true" />
         <copy todir="../bin">
             <fileset basedir=".">
                 <include name="IKVM.OpenJDK.*.dll" />
             </fileset>
         </copy>
-        <!-- update base addresses in response.txt for next build -->
-        <exec program="${project::get-base-directory()}/../tools/updbaseaddresses.exe" commandline="response.txt" useruntimeengine="true" />
+        <!-- make sure that we haven't accidentally introduced new dependencies -->
+        <exec program="${project::get-base-directory()}/../tools/depcheck.exe" commandline="response.txt dependencies.txt" useruntimeengine="true" />
 
         <!-- generate stubs for the public Java APIs we expose -->
         <mkdir dir="../lib" />
@@ -312,52 +314,58 @@
         </exec>
     </target>
 
-    <target name="tools.gen.rsp">
-        <copy file="tools.rsp" tofile="tools.gen.rsp" outputencoding="ascii" overwrite="true">
-            <filterchain>
-                <replacetokens>
-                    <token key="OPENJDK" value="${OpenJDK.dir}" />
-                </replacetokens>
-            </filterchain>
-        </copy>
-    </target>
+    <target name="tools.gen.rsp"></target>
 
-    <target name="tools" depends="version tools.gen.rsp">
-        <exec program="${project::get-base-directory()}/../bin/ikvmc.exe" useruntimeengine="true">
-            <arg value="-r:mscorlib.dll" />
-            <arg value="-version:${VERSION}" />
-            <arg value="${signoption}" />
-            <arg value="-warnaserror" />
-            <arg value="-w4" />
-            <arg value="-noparameterreflection" />
-            <arg value="@tools.gen.rsp" />
-        </exec>
-    </target>
-
-    <target name="jdk-tools" depends="version">
+    <target name="tools" depends="version">
+    <!-- OpenJDK.NET: The OpenJDK port for Microsoft.NET made by Jessie Lesbian -->
         <exec program="${project::get-base-directory()}/../bin/ikvmc.exe" useruntimeengine="true">
             <arg value="-version:${VERSION}" />
+            <arg value="-apartment:none"/>
             <arg value="-out:../bin/javac.exe" />
-            <arg value="-main:com.sun.tools.javac.Main" />
-            <arg value="-r:../bin/IKVM.OpenJDK.Tools.dll" />
+            <arg value="-main:sun.tools.javac.Main" />
+            <arg value="-r:../bin/IKVM.OpenJDK.Core.dll" />
         </exec>
         <exec program="${project::get-base-directory()}/../bin/ikvmc.exe" useruntimeengine="true">
             <arg value="-version:${VERSION}" />
+            <arg value="-apartment:none"/>
             <arg value="-out:../bin/javah.exe" />
             <arg value="-main:com.sun.tools.javah.Main" />
-            <arg value="-r:../bin/IKVM.OpenJDK.Tools.dll" />
+            <arg value="-r:../bin/IKVM.OpenJDK.Core.dll" />
         </exec>
         <exec program="${project::get-base-directory()}/../bin/ikvmc.exe" useruntimeengine="true">
             <arg value="-version:${VERSION}" />
+            <arg value="-apartment:none"/>
             <arg value="-out:../bin/javap.exe" />
             <arg value="-main:com.sun.tools.javap.Main" />
-            <arg value="-r:../bin/IKVM.OpenJDK.Tools.dll" />
+            <arg value="-r:../bin/IKVM.OpenJDK.Core.dll" />
         </exec>
         <exec program="${project::get-base-directory()}/../bin/ikvmc.exe" useruntimeengine="true">
             <arg value="-version:${VERSION}" />
-            <arg value="-out:../bin/jjs.exe" />
-            <arg value="-main:jdk.nashorn.tools.Shell" />
+            <arg value="-apartment:none"/>
+            <arg value="-out:../bin/jar.exe" />
+            <arg value="-main:sun.tools.jar.Main" />
+            <arg value="-r:../bin/IKVM.OpenJDK.Core.dll" />
+        </exec>
+        <exec program="${project::get-base-directory()}/../bin/ikvmc.exe" useruntimeengine="true">
+            <arg value="-version:${VERSION}" />
+            <arg value="-apartment:none"/>
+            <arg value="-out:../bin/native2ascii.exe" />
+            <arg value="-main:sun.tools.native2ascii.Main" />
+            <arg value="-r:../bin/IKVM.OpenJDK.Core.dll" />
+        </exec>
+        <exec program="${project::get-base-directory()}/../bin/ikvmc.exe" useruntimeengine="true">
+            <arg value="-version:${VERSION}" />
+            <arg value="-apartment:none"/>
+            <arg value="-out:../bin/rmic.exe" />
+            <arg value="-main:sun.rmi.rmic.Main" />
+            <arg value="-r:../bin/IKVM.OpenJDK.Core.dll" />
+        </exec>
+        <exec program="${project::get-base-directory()}/../bin/ikvmc.exe" useruntimeengine="true">
+            <arg value="-version:${VERSION}" />
+            <arg value="-apartment:none"/>
+            <arg value="-out:../bin/newrmic.exe" />
+            <arg value="-main:sun.rmi.rmic.newrmic.Main" />
+            <arg value="-r:../bin/IKVM.OpenJDK.Core.dll" />
         </exec>
     </target>
-
 </project>

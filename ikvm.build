@@ -68,16 +68,10 @@
                 <include name="bin/IKVM.Runtime.dll" />
                 <include name="bin/IKVM.Runtime.JNI.dll" />
                 <include name="bin/IKVM.OpenJDK.*.dll" />
-                <include name="bin/ikvm.exe" />
                 <include name="bin/ikvm.exe.config" />
-                <include name="bin/ikvmc.exe" />
                 <include name="bin/ikvmc.exe.config" />
-                <include name="bin/ikvmstub.exe" />
                 <include name="bin/ikvmstub.exe.config" />
-                <include name="bin/javac.exe" />
-                <include name="bin/javah.exe" />
-                <include name="bin/javap.exe" />
-                <include name="bin/jjs.exe" />
+                <include name="bin/*.exe" />
                 <include name="bin-x64/JVM.DLL" />
                 <include name="bin-x86/JVM.DLL" />
                 <include name="lib/ikvm-api.jar" />

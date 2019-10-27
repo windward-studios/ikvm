@@ -149,3 +149,17 @@ IKVM.OpenJDK.Localedata
 
 IKVM.OpenJDK.Cldrdata
 ->IKVM.OpenJDK.Util
+
+IKVM.OpenJDK.Tools
+->IKVM.OpenJDK.Text
+->IKVM.OpenJDK.Util
+->IKVM.OpenJDK.XML.API
+->IKVM.OpenJDK.XML.Bind
+->IKVM.OpenJDK.Misc
+->IKVM.OpenJDK.XML.WebServices
+->IKVM.OpenJDK.Remoting
+->IKVM.OpenJDK.Security
+->IKVM.OpenJDK.XML.Parse
+->IKVM.OpenJDK.Beans
+->IKVM.OpenJDK.SwingAWT
+->IKVM.OpenJDK.Corba
