@@ -11,6 +11,7 @@
 ## List of things Jessie Lesbian want to do
 
  + Fully support Swing and AWT
+ + Some tweaks around object, string and throwable
  + Play Minecraft with this IKVM.NET fork
 
 ## Build
@@ -32,3 +33,5 @@ If you have a problem or an opinion, please send me an email. My email is jessie
 ## About OpenJDK.NET: The OpenJDK port for Microsoft.NET made by Jessie Lesbian
 
 OpenJDK.NET is an OpenJDK port for Microsoft.NET made by Jessie Lesbian. It contains 6 JDK tools: javac, javah, javap, jar, native2ascii, and rmic. It is currently an experimental feature and may not work.
+
+NOTE: The javac tool is currently unusable due to missing resources.
