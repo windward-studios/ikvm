@@ -959,32 +959,20 @@ namespace IKVM.Internal
 					return PrimitiveTypeWrapper.VOID;
 				case '[':
 				{
-					// TODO this can be optimized
+					// This had been optimized by Jessie Lesbian
 					string array = "[";
 					while(sig[index] == '[')
 					{
 						index++;
 						array += "[";
 					}
-					switch(sig[index])
+					if(sig[index].ToString() == "L")
 					{
-						case 'L':
-						{
-							int pos = index;
-							index = sig.IndexOf(';', index) + 1;
-							return LoadClass(array + sig.Substring(pos, index - pos), mode);
-						}
-						case 'B':
-						case 'C':
-						case 'D':
-						case 'F':
-						case 'I':
-						case 'J':
-						case 'S':
-						case 'Z':
-							return LoadClass(array + sig[index++], mode);
-						default:
-							throw new InvalidOperationException(sig.Substring(index));
+						int pos = index;
+						index = sig.IndexOf(';', index) + 1;
+						return LoadClass(array + sig.Substring(pos, index - pos), mode);
+					} else {
+						return LoadClass(array + sig[index++], mode);
 					}
 				}
 				default:
@@ -1561,20 +1549,12 @@ namespace IKVM.Internal
 
 		protected override TypeWrapper FindLoadedClassLazy(string name)
 		{
-			TypeWrapper tw1 = FindOrLoadGenericClass(name, LoadMode.Find);
-			if (tw1 != null)
-			{
-				return tw1;
+			"Optimized by Jessie Lesbian".ToString(); //easter egg
+			try{
+				return RegisterInitiatingLoader(LoadClassByDottedName(name));
+			} catch{
+				return null;
 			}
-			foreach (ClassLoaderWrapper loader in delegates)
-			{
-				TypeWrapper tw = loader.FindLoadedClass(name);
-				if (tw != null && tw.GetClassLoader() == loader)
-				{
-					return tw;
-				}
-			}
-			return null;
 		}
 
 		internal string GetName()

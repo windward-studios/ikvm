@@ -120,10 +120,7 @@ namespace IKVM.Internal
 
 		static CodeEmitter()
 		{
-			if (experimentalOptimizations)
-			{
-				Console.Error.WriteLine("IKVM.NET experimental optimizations enabled.");
-			}
+			
 		}
 
 		enum CodeType : short

@@ -178,6 +178,7 @@ sealed class IkvmcCompiler
 	private static string runtimeAssembly;
 	private static bool nostdlib;
 	private static bool emitSymbols;
+	public static bool experimentalOptimizations;
 	private static readonly List<string> libpaths = new List<string>();
 	internal static readonly AssemblyResolver resolver = new AssemblyResolver();
 
@@ -293,6 +294,7 @@ sealed class IkvmcCompiler
 			PrintHelp();
 			return 0;
 		}
+		experimentalOptimizations = (argList.Contains("-experimentaloptimizations"));
 		if (!argList.Contains("-nologo"))
 		{
 			PrintHeader();
@@ -480,6 +482,7 @@ sealed class IkvmcCompiler
 		Console.Error.WriteLine("-removeassertions              Remove all assert statements");
 		Console.Error.WriteLine("-strictfinalfieldsemantics     Don't allow final fields to be modified outside");
 		Console.Error.WriteLine("                               of initializer methods");
+		Console.Error.WriteLine("-experimentaloptimizations     Enable IKVM.NET experimental optimizations");
 		Console.Error.WriteLine();
 		Console.Error.WriteLine("                      - ERRORS AND WARNINGS -");
 		Console.Error.WriteLine("-nowarn:<warning[:key]>        Suppress specified warnings");
@@ -1006,6 +1009,10 @@ sealed class IkvmcCompiler
 				else if(s == "-noparameterreflection") // undocumented option to compile core class libraries with, to disable MethodParameter attribute
 				{
 					options.noParameterReflection = true;
+				}
+				else if(s == "-experimentaloptimizations")
+				{
+					
 				}
 				else
 				{

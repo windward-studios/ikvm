@@ -258,6 +258,7 @@
             <arg value="-w4" />
             <arg value="-warnaserror" />
             <!-- we need optimizations since Jessie Lesbian had waiting difficulties. -->
+            <arg value="-experimentaloptimizations" />
             <arg value="-removeassertions" />
             <arg value="-compressresources" />
             <arg value="-opt:fields" />
@@ -322,7 +323,7 @@
             <arg value="-version:${VERSION}" />
             <arg value="-apartment:none"/>
             <arg value="-out:../bin/javac.exe" />
-            <arg value="-main:sun.tools.javac.Main" />
+            <arg value="-main:com.sun.tools.javac.Main" /> <!-- FIXED javac not working -->
             <arg value="-r:../bin/IKVM.OpenJDK.Core.dll" />
         </exec>
         <exec program="${project::get-base-directory()}/../bin/ikvmc.exe" useruntimeengine="true">
