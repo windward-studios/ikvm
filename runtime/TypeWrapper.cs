@@ -1984,7 +1984,6 @@ namespace IKVM.Internal
 
 	internal abstract class TypeWrapper
 	{
-		private static readonly object flagsLock = new object();
 		private readonly string name;		// java name (e.g. java.lang.Object)
 		private readonly Modifiers modifiers;
 		private TypeFlags flags;
@@ -2270,7 +2269,7 @@ namespace IKVM.Internal
 		private void SetTypeFlag(TypeFlags flag)
 		{
 			// we use a global lock object, since the chance of contention is very small
-			lock (flagsLock)
+			lock (this)
 			{
 				flags |= flag;
 			}

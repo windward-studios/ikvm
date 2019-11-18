@@ -286,6 +286,13 @@ public static class Starter
                 {
                     Console.Error.WriteLine("Unsupported option ignored: {0}", arg);
                 }
+				else if(arg.StartsWith("-Xoptimize:")){
+					try{
+						jessielesbian.IKVM.Helper.optpasses = (int)Convert.ToUInt32(arg.Replace("-Xoptimize:", ""));
+					} catch{
+						Console.Error.WriteLine("SORRY, IKVM.NET experimental optimizations disabled, reason: negative or invalid number of optimization passes.");
+					}
+				}
                 else
                 {
                     Console.Error.WriteLine("{0}: illegal argument", arg);
@@ -417,6 +424,7 @@ public static class Starter
 		Console.Error.WriteLine("    -da[:<packagename>...|:<classname>]");
 		Console.Error.WriteLine("    -disableassertions[:<packagename>...|:<classname>]");
 		Console.Error.WriteLine("                      Disable assertions");
+		Console.Error.WriteLine("    -? -help          Display this message");
 	}
 
 	private static void PrintXHelp()
@@ -431,6 +439,7 @@ public static class Starter
 		Console.Error.WriteLine("    -Xnoclassgc       Disable class garbage collection");
 		Console.Error.WriteLine("    -Xnoglobbing      Disable argument globbing");
 		Console.Error.WriteLine("    -Xverify          Enable strict class file verification");
+		Console.Error.WriteLine("    -Xoptimize:n      Enable IKVM.NET experimental optimizations and use N passes of optimization");
 		Console.Error.WriteLine();
 		Console.Error.WriteLine("The -X options are non-standard and subject to change without notice.");
 		Console.Error.WriteLine();

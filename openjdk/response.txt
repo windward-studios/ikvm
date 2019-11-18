@@ -687,7 +687,6 @@ sun/reflect/annotation/*.class
 }
 {
 -out:IKVM.OpenJDK.SwingAWT.dll
--remap:swingawt.xml
 -resource:META-INF/services/sun.java2d.pipe.RenderingEngine=resources/META-INF/services/sun.java2d.pipe.RenderingEngine
 -resource:META-INF/services/sun.java2d.cmm.CMMServiceProvider=@OPENJDK@/jdk/src/share/classes/sun/java2d/cmm/lcms/META-INF/services/sun.java2d.cmm.CMMServiceProvider
 -recurse:resources.zip/com/sun/java/swing/*

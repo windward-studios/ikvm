@@ -194,6 +194,7 @@
     <Compile Include="vm.cs">
       <SubType>Code</SubType>
     </Compile>
+	<Compile Include="..\jessielesbian.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>

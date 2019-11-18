@@ -102,7 +102,11 @@ namespace IKVM.Internal
 		private static readonly MethodInfo verboseCastFailure = JVM.SafeGetEnvironmentVariable("IKVM_VERBOSE_CAST") == null ? null : ByteCodeHelperMethods.VerboseCastFailure;
 		private static readonly MethodInfo monitorEnter = JVM.Import(typeof(System.Threading.Monitor)).GetMethod("Enter", BindingFlags.Public | BindingFlags.Static, null, new Type[] { Types.Object }, null);
 		private static readonly MethodInfo monitorExit = JVM.Import(typeof(System.Threading.Monitor)).GetMethod("Exit", BindingFlags.Public | BindingFlags.Static, null, new Type[] { Types.Object }, null);
-		private static readonly bool experimentalOptimizations = JVM.SafeGetEnvironmentVariable("IKVM_EXPERIMENTAL_OPTIMIZATIONS") != null;
+		private static bool experimentalOptimizations {
+			get {
+				return jessielesbian.IKVM.Helper.experimentalOptimizations;
+			}
+		}
 		private static MethodInfo memoryBarrier;
 		private ILGenerator ilgen_real;
 #if !STATIC_COMPILER
@@ -117,12 +121,7 @@ namespace IKVM.Internal
 #if LABELCHECK
 		private Dictionary<CodeEmitterLabel, System.Diagnostics.StackFrame> labels = new Dictionary<CodeEmitterLabel, System.Diagnostics.StackFrame>();
 #endif
-
-		static CodeEmitter()
-		{
-			
-		}
-
+		private bool optimized = false;
 		enum CodeType : short
 		{
 			Unreachable,
@@ -2294,19 +2293,19 @@ namespace IKVM.Internal
 				}
 			}
 		}
-
-		internal void DoEmit()
-		{
+		private void Optimize(){
+			if(optimized){
+				return;
+			}
+			optimized = true;
 			OptimizePatterns();
 			CLRv4_x64_JIT_Workaround();
 			RemoveRedundantMemoryBarriers();
-
 			if (experimentalOptimizations)
 			{
 				CheckInvariants();
 				MoveLocalDeclarationToBeginScope();
-
-				for (int i = 0; i < 4; i++)
+				for (int i = 0; i < jessielesbian.IKVM.Helper.optpasses; i++)
 				{
 					RemoveJumpNext();
 					CheckInvariants();
@@ -2334,12 +2333,12 @@ namespace IKVM.Internal
 					CheckInvariants();
 				}
 			}
-
-#if STATIC_COMPILER
 			OptimizeEncodings();
 			OptimizeBranchSizes();
-#endif
-
+		}
+		internal void DoEmit()
+		{
+			Optimize();
 			int ilOffset = 0;
 			int lineNumber = -1;
 			for (int i = 0; i < code.Count; i++)
