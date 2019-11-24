@@ -40,5 +40,18 @@
                 <include name="${ReferencePath}/System.dll" />
             </references>
         </csc>
+        <csc target="winexe" output="../bin/ikvmw.exe" define="TRACE;${signed}" noconfig="true" nostdlib="true">
+            <sources>
+                <include name="../CommonAssemblyInfo.cs" />
+                <include name="*.cs" />
+            </sources>
+            <references>
+                <include name="../bin/IKVM.OpenJDK.Core.dll" asis="true" />
+                <include name="../bin/IKVM.OpenJDK.Util.dll" asis="true" />
+                <include name="../bin/IKVM.Runtime.dll" asis="true" />
+                <include name="${ReferencePath}/mscorlib.dll" />
+                <include name="${ReferencePath}/System.dll" />
+            </references>
+        </csc>
     </target>
 </project>

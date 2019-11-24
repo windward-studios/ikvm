@@ -229,7 +229,7 @@ sealed class IkvmcCompiler
 		return arglist;
 	}
 
-	static int Main(string[] args)
+	[MTAThreadAttribute] static int Main(string[] args)
 	{
 		DateTime start = DateTime.Now;
 		System.Threading.Thread.CurrentThread.Name = "compiler";

@@ -22,7 +22,7 @@
   jeroen@frijters.net
   
 -->
-<project name="ClassLibrary" default="all">
+<project name="ClassLibrary" default="tools">
     <include buildfile="../ikvm.include" />
     <property name="pathsep" value=":" />
     <property overwrite="false" name="signoption" value="" />
@@ -35,102 +35,10 @@
     <if test="${platform::is-win32()}">
         <property name="pathsep" value=";" />
     </if>
-    <property name="java" value="" />
-
-    <target name="all" depends="classes rmi run-nasgen vfs resources core"></target>
 
     <target name="version">
         <property name="VERSION" value="${assemblyname::get-version(assemblyname::get-assembly-name(path::combine(project::get-base-directory(), '../bin/IKVM.Runtime.dll')))}" />
     </target>
-
-    <target name="copyright" depends="allsources.gen.lst"></target>
-
-    <target name="allsources.gen.lst">
-        <copy file="allsources.lst" tofile="allsources.gen.lst" outputencoding="ascii" overwrite="true">
-            <filterchain>
-                <replacetokens>
-                    <token key="OPENJDK" value="${OpenJDK.dir}" />
-                </replacetokens>
-            </filterchain>
-        </copy>
-    </target>
-
-    <target name="System.Core" unless="${SkipSystemCoreDependency}">
-        <delete file="System.Core.dll" />
-        <if test="${version::get-major(framework::get-version(framework::get-target-framework() )) &lt; 4}">
-            <copy file="../bin/IKVM.Reflection.dll" todir="." overwrite="true" />
-            <csc target="exe" output="GenerateSystemCore.exe">
-                <sources>
-                    <include name="GenerateSystemCore.cs" />
-                </sources>
-                <references>
-                    <include name="IKVM.Reflection.dll" asis="true" />
-                </references>
-            </csc>
-            <exec program="GenerateSystemCore.exe" useruntimeengine="true" />
-            <delete>
-                <fileset basedir=".">
-                    <include name="IKVM.Reflection.dll"/>
-                    <include name="GenerateSystemCore.exe"/>
-                </fileset>
-            </delete>
-        </if>
-    </target>
-
-    <target name="DummySystemCoreJar">
-        <exec program="javac" commandline="-implicit:none ExtensionAttribute.java" useruntimeengine="false" />
-        <zip zipfile="System.Core.jar">
-            <fileset prefix="cli/System/Runtime/CompilerServices">
-                <include name="ExtensionAttribute.class" />
-                <include name="ExtensionAttribute$Annotation.class" />
-            </fileset>
-        </zip>
-        <delete>
-            <fileset basedir=".">
-                <include name="ExtensionAttribute.class" />
-                <include name="ExtensionAttribute$Annotation.class" />
-            </fileset>
-        </delete>
-    </target>
-
-    <target name="clean-classes"></target>
-
-    <target name="clean-stubjars"></target>
-
-    <target name="stubjars" depends="clean-stubjars System.Core"></target>
-    <target name="runtime-identity">
-        <property name="IKVM.Runtime" value="IKVM.Runtime" />
-        <property name="IKVM.AWT.WinForms" value="IKVM.AWT.WinForms" />
-        <if test="${signoption != ''}">
-            <loadfile file="../tools/pubkey.txt" property="publickey" />
-            <property name="IKVM.Runtime" value="IKVM.Runtime, PublicKey=${publickey}" />
-            <property name="IKVM.AWT.WinForms" value="IKVM.AWT.WinForms, PublicKey=${publickey}" />
-        </if>
-    </target>
-
-    <target name="AssemblyInfo.java" depends="runtime-identity version copyright"></target>
-    <target name="PropertyConstants.java" depends="version">
-        <copy file="java/lang/PropertyConstants.java.in" tofile="java/lang/PropertyConstants.java" outputencoding="ascii" overwrite="true">
-            <filterchain>
-                <replacetokens>
-                    <token key="AWTASSEMBLY" value="${string::replace(assemblyname::get-full-name(assemblyname::get-assembly-name(path::combine(project::get-base-directory(), '../bin/IKVM.Runtime.dll'))), 'IKVM.Runtime', 'IKVM.AWT.WinForms')}" />
-                    <token key="VERSION" value="${VERSION}" />
-                    <token key="OPENJDK_VERSION" value="${OPENJDK_VERSION}" />
-                </replacetokens>
-            </filterchain>
-        </copy>
-    </target>
-
-    <target name="classes" depends="clean-classes stubjars allsources.gen.lst AssemblyInfo.java PropertyConstants.java"></target>
-
-    <target name="classpath">
-        <property name="CLASSPATH" value="mscorlib.jar${pathsep}System.Xml.jar${pathsep}${OpenJDK.dir}/jdk/src/share/classes/${pathsep}${OpenJDK.dir}/corba/src/share/classes${pathsep}${OpenJDK.dir}/build/linux-x86_64-normal-server-release/jdk/gensrc" />
-    </target>
-
-    <target name="rmi" depends="classpath"></target>
-
-    <target name="run-nasgen" depends="classpath"></target>
-
     
     <target name="vfs">
         <!-- This file is generated here, but it is added as a resource to IKVM.Runtime.dll, because Ref.Emit on .NET 1.1 doesn't support adding a raw resource. -->
@@ -238,7 +146,7 @@
         <touch file="resources/nashorn/version.properties" datetime="${file::get-last-write-time('resources/nashorn/version.properties.in')}" />
     </target>
     
-    <target name="core" depends="version response.gen.txt MANIFEST.MF nashorn-version">
+    <target name="core" depends="vfs resources version response.gen.txt MANIFEST.MF nashorn-version">
         <copy file="../bin/IKVM.Runtime.dll" todir="." />
         <copy file="../bin/IKVM.AWT.WinForms.dll" todir="." />
         <exec program="${project::get-base-directory()}/../bin/ikvmc.exe" useruntimeengine="true">
@@ -303,21 +211,9 @@
         </copy>
         <!-- make sure that we haven't accidentally introduced new dependencies -->
         <exec program="${project::get-base-directory()}/../tools/depcheck.exe" commandline="response.txt dependencies.txt" useruntimeengine="true" />
-
-        <!-- generate stubs for the public Java APIs we expose -->
-        <mkdir dir="../lib" />
-        <exec program="${project::get-base-directory()}/../bin/ikvmstub.exe" useruntimeengine="true">
-            <arg value="-out:../lib/ikvm-api.jar" />
-            <arg value="../bin/IKVM.OpenJDK.Core.dll" />
-            <arg value="-namespace:ikvm.io" />
-            <arg value="-namespace:ikvm.lang" />
-            <arg value="-namespace:ikvm.runtime" />
-        </exec>
     </target>
 
-    <target name="tools.gen.rsp"></target>
-
-    <target name="tools" depends="version">
+    <target name="tools" depends="core">
     <!-- OpenJDK.NET: The OpenJDK port for Microsoft.NET made by Jessie Lesbian -->
         <exec program="${project::get-base-directory()}/../bin/ikvmc.exe" useruntimeengine="true">
             <arg value="-version:${VERSION}" />
