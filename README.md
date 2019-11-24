@@ -22,6 +22,11 @@
  + Optimization in IKVM Dynamic Launcher
  + Optimize encodings in dynamic mode to save RAM
  + Optimize branch sizes in dynamic mode to save RAM
+ + Refactored OpenJDK Library build
+ + Removed allsources.lst
+ + Slight speedup for IKVMC and ikvmstub
+ + Bumped version to 8.5.1.0
+ + Added ikvmw.exe - the IKVM equivalent of javaw.exe
 
 ## List of changes Jessie Lesbian want to make
 
@@ -41,9 +46,11 @@ NOTE: The built-in NANT tool may not work if you extract using windows explorer'
 
 If you hate building or can't build, don't worry, you will still experience the Java Virtual Machine made in C#. The cute-looking Jessie Lesbian had built all of this herself just in case you don't want to or can't build.
 
-[download](https://github.com/jessielesbian/ikvm/releases/download/8.5.0.3b4/ikvm_8.5.0.3b4_bin_windows.zip)
+[download](https://github.com/jessielesbian/ikvm/releases/download/8.5.1.0/ikvm_8.5.1.0_bin_windows.zip)
 
-If you have a problem or an opinion, please send me an email. My email is jessielesbian@protonmail.com.
+If you have a problem or an opinion, please send an email to jessielesbian@protonmail.com or go to https://www.reddit.com/r/IKVM/.
+
+NOTE: The official build doesn't come with proper JNI support.
 
 ## About OpenJDK.NET: The OpenJDK port for Microsoft.NET made by Jessie Lesbian
 
