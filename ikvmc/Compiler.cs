@@ -602,6 +602,7 @@ sealed class IkvmcCompiler
 						case "-target:library":
 							options.target = PEFileKinds.Dll;
 							options.guessFileKind = false;
+							emitSymbols = true;
 							break;
 						default:
 							throw new FatalCompilerErrorException(Message.UnrecognizedTargetType, s.Substring(8));

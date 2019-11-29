@@ -110,16 +110,6 @@
         </zip>
     </target>
 
-    <target name="response.gen.txt">
-        <copy file="response.txt" tofile="response.gen.txt" outputencoding="ascii" overwrite="true">
-            <filterchain>
-                <replacetokens>
-                    <token key="OPENJDK" value="${OpenJDK.dir}" />
-                </replacetokens>
-            </filterchain>
-        </copy>
-    </target>
-
     <target name="MANIFEST.MF">
         <copy file="MANIFEST.MF.in" tofile="MANIFEST.MF" outputencoding="ascii" overwrite="true">
             <filterchain>
@@ -146,7 +136,7 @@
         <touch file="resources/nashorn/version.properties" datetime="${file::get-last-write-time('resources/nashorn/version.properties.in')}" />
     </target>
     
-    <target name="core" depends="vfs resources version response.gen.txt MANIFEST.MF nashorn-version">
+    <target name="core" depends="vfs resources version MANIFEST.MF nashorn-version">
         <copy file="../bin/IKVM.Runtime.dll" todir="." />
         <copy file="../bin/IKVM.AWT.WinForms.dll" todir="." />
         <exec program="${project::get-base-directory()}/../bin/ikvmc.exe" useruntimeengine="true">
@@ -175,7 +165,7 @@
             <arg value="-nostacktraceinfo"/>
             <arg value="-filealign:4096"/>
             <arg value="-noautoserialization"/>
-            <arg value="@response.gen.txt" />
+            <arg value="@response.txt" />
         </exec>
         <if test="${property::exists('peverify')}">
             <exec program="${peverify}" commandline="-nologo IKVM.OpenJDK.Beans.dll" />

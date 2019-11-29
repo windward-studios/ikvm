@@ -47,7 +47,7 @@ namespace ikvm.awt
     /// <summary>
     /// This class has some static convertion methods from Java to C# objects
     /// </summary>
-    class J2C
+    internal static class J2C
     {
 
         internal static Color ConvertColor(java.awt.Color color)
@@ -330,7 +330,7 @@ namespace ikvm.awt
     /// <summary>
     /// This class has some static convertion function from C# to Java objects
     /// </summary>
-    class C2J
+    internal static class C2J
     {
         internal static java.awt.geom.AffineTransform ConvertMatrix(Matrix matrix)
         {
