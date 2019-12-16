@@ -157,6 +157,7 @@
             <arg value="-warnaserror" />
             <!-- we need optimizations since Jessie Lesbian had waiting difficulties. -->
             <arg value="-optimize:5" />
+            <arg value="-preoptimize" />
             <arg value="-removeassertions" />
             <arg value="-compressresources" />
             <arg value="-opt:fields" />

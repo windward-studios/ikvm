@@ -30,6 +30,7 @@ using ICSharpCode.SharpZipLib.Zip;
 using IKVM.Internal;
 using IKVM.Reflection;
 using IKVM.Reflection.Emit;
+using jessielesbian.IKVM;
 using Type = IKVM.Reflection.Type;
 
 sealed class FatalCompilerErrorException : Exception
@@ -400,7 +401,14 @@ sealed class IkvmcCompiler
 	{
 		try
 		{
-			return File.ReadAllBytes(path.FullName);
+			//ULTRA fast 2-step file reader by Jessie Lesbian
+			FileStream fileStream = path.OpenRead();
+			MemoryStream memoryStream = new MemoryStream((int) fileStream.Length);
+			fileStream.CopyTo(memoryStream);
+			fileStream.Dispose();
+			byte[] bytes = memoryStream.ToArray();
+			memoryStream.Dispose();
+			return bytes;
 		}
 		catch (Exception x)
 		{
@@ -481,6 +489,7 @@ sealed class IkvmcCompiler
 		Console.Error.WriteLine("-strictfinalfieldsemantics     Don't allow final fields to be modified outside");
 		Console.Error.WriteLine("                               of initializer methods");
 		Console.Error.WriteLine("-optimize:n                    Enable IKVM.NET experimental optimizations and use N passes of optimization");
+		Console.Error.WriteLine("-preoptimize                   Enable precompilation optimizations");
 		Console.Error.WriteLine();
 		Console.Error.WriteLine("                      - ERRORS AND WARNINGS -");
 		Console.Error.WriteLine("-nowarn:<warning[:key]>        Suppress specified warnings");
@@ -1012,10 +1021,14 @@ sealed class IkvmcCompiler
 				else if(s.StartsWith("-optimize:"))
 				{
 					try{
-						jessielesbian.IKVM.Helper.optpasses = (int)Convert.ToUInt32(s.Replace("-optimize:", ""));
+						Helper.optpasses = (int)Convert.ToUInt32(s.Replace("-optimize:", ""));
 					} catch{
 						Console.Error.WriteLine("SORRY, IKVM.NET experimental optimizations disabled, reason: negative or invalid number of optimization passes.");
 					}
+				}
+				else if(s == "-preoptimize")
+				{
+					Helper.enableJITPreOptimization = true;
 				}
 				else
 				{

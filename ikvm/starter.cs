@@ -28,6 +28,7 @@ using System.Reflection;
 using IKVM.Internal;
 using ikvm.runtime;
 using java.lang.reflect;
+using jessielesbian.IKVM;
 
 public static class Starter
 {
@@ -288,10 +289,14 @@ public static class Starter
                 }
 				else if(arg.StartsWith("-Xoptimize:")){
 					try{
-						jessielesbian.IKVM.Helper.optpasses = (int)Convert.ToUInt32(arg.Replace("-Xoptimize:", ""));
+						Helper.optpasses = (int)Convert.ToUInt32(arg.Replace("-Xoptimize:", ""));
 					} catch{
 						Console.Error.WriteLine("SORRY, IKVM.NET experimental optimizations disabled, reason: negative or invalid number of optimization passes.");
 					}
+				}
+				else if(arg == "-Xpreoptimize")
+				{
+					Helper.enableJITPreOptimization = true;
 				}
                 else
                 {
@@ -440,6 +445,7 @@ public static class Starter
 		Console.Error.WriteLine("    -Xnoglobbing      Disable argument globbing");
 		Console.Error.WriteLine("    -Xverify          Enable strict class file verification");
 		Console.Error.WriteLine("    -Xoptimize:n      Enable IKVM.NET experimental optimizations and use N passes of optimization");
+		Console.Error.WriteLine("    -Xpreoptimize     Enable precompilation optimizations");
 		Console.Error.WriteLine();
 		Console.Error.WriteLine("The -X options are non-standard and subject to change without notice.");
 		Console.Error.WriteLine();

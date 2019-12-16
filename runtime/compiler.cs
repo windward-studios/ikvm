@@ -35,6 +35,7 @@ using System.Diagnostics;
 using System.Diagnostics.SymbolStore;
 using IKVM.Attributes;
 using IKVM.Internal;
+using jessielesbian.IKVM;
 
 using ExceptionTableEntry = IKVM.Internal.ClassFile.Method.ExceptionTableEntry;
 using LocalVariableTableEntry = IKVM.Internal.ClassFile.Method.LocalVariableTableEntry;
@@ -288,7 +289,6 @@ sealed class Compiler
 	private bool nonleaf;
 	private readonly bool debug;
 	private readonly bool keepAlive;
-	private readonly bool strictfp;
 	private readonly bool emitLineNumbers;
 	private int[] scopeBegin;
 	private int[] scopeClose;
@@ -336,7 +336,6 @@ sealed class Compiler
 		this.m = m;
 		this.ilGenerator = ilGenerator;
 		this.debug = classLoader.EmitDebugInfo;
-		this.strictfp = m.IsStrictfp;
 		if(mw.IsConstructor)
 		{
 			MethodWrapper finalize = clazz.GetMethodWrapper(StringConstants.FINALIZE, StringConstants.SIG_VOID, true);
@@ -1064,6 +1063,10 @@ sealed class Compiler
 				}
 			}
 		}
+		if(Helper.enableJITPreOptimization)
+		{
+			code = Helper.Optimize(code);
+		}
 		for(int i = 0; i < code.Length; i++)
 		{
 			Instruction instr = code[i];
@@ -1357,11 +1360,7 @@ sealed class Compiler
 					FieldWrapper field = cpi.GetField();
 					TypeWrapper tw = field.FieldTypeWrapper;
 					tw.EmitConvStackTypeToSignatureType(ilGenerator, ma.GetStackTypeWrapper(i, 0));
-					if(strictfp)
-					{
-						// no need to convert
-					}
-					else if(tw == PrimitiveTypeWrapper.DOUBLE)
+					if(tw == PrimitiveTypeWrapper.DOUBLE)
 					{
 						ilGenerator.Emit(OpCodes.Conv_R8);
 					}
@@ -1390,11 +1389,7 @@ sealed class Compiler
 						ilGenerator.Emit(OpCodes.Ldloc, temp);
 					}
 					tw.EmitConvStackTypeToSignatureType(ilGenerator, ma.GetStackTypeWrapper(i, 0));
-					if(strictfp)
-					{
-						// no need to convert
-					}
-					else if(tw == PrimitiveTypeWrapper.DOUBLE)
+					if(tw == PrimitiveTypeWrapper.DOUBLE)
 					{
 						ilGenerator.Emit(OpCodes.Conv_R8);
 					}
@@ -2262,10 +2257,7 @@ sealed class Compiler
 					break;
 				case NormalizedByteCode.__dadd:
 					ilGenerator.Emit(OpCodes.Add);
-					if(strictfp)
-					{
-						ilGenerator.Emit(OpCodes.Conv_R8);
-					}
+					ilGenerator.Emit(OpCodes.Conv_R8);
 					break;
 				case NormalizedByteCode.__isub:
 				case NormalizedByteCode.__lsub:
@@ -2277,10 +2269,7 @@ sealed class Compiler
 					break;
 				case NormalizedByteCode.__dsub:
 					ilGenerator.Emit(OpCodes.Sub);
-					if(strictfp)
-					{
-						ilGenerator.Emit(OpCodes.Conv_R8);
-					}
+					ilGenerator.Emit(OpCodes.Conv_R8);
 					break;
 				case NormalizedByteCode.__ixor:
 				case NormalizedByteCode.__lxor:
@@ -2304,10 +2293,7 @@ sealed class Compiler
 					break;
 				case NormalizedByteCode.__dmul:
 					ilGenerator.Emit(OpCodes.Mul);
-					if(strictfp)
-					{
-						ilGenerator.Emit(OpCodes.Conv_R8);
-					}
+					ilGenerator.Emit(OpCodes.Conv_R8);
 					break;
 				case NormalizedByteCode.__idiv:
 					ilGenerator.Emit_idiv();
@@ -2321,10 +2307,7 @@ sealed class Compiler
 					break;
 				case NormalizedByteCode.__ddiv:
 					ilGenerator.Emit(OpCodes.Div);
-					if(strictfp)
-					{
-						ilGenerator.Emit(OpCodes.Conv_R8);
-					}
+					ilGenerator.Emit(OpCodes.Conv_R8);
 					break;
 				case NormalizedByteCode.__irem:
 				case NormalizedByteCode.__lrem:
@@ -2361,10 +2344,7 @@ sealed class Compiler
 					break;
 				case NormalizedByteCode.__drem:
 					ilGenerator.Emit(OpCodes.Rem);
-					if(strictfp)
-					{
-						ilGenerator.Emit(OpCodes.Conv_R8);
-					}
+					ilGenerator.Emit(OpCodes.Conv_R8);
 					break;
 				case NormalizedByteCode.__ishl:
 					ilGenerator.Emit_And_I4(31);
@@ -2812,11 +2792,7 @@ sealed class Compiler
 	private void EmitReturnTypeConversion(TypeWrapper returnType)
 	{
 		returnType.EmitConvSignatureTypeToStackType(ilGenerator);
-		if (!strictfp)
-		{
-			// no need to convert
-		}
-		else if (returnType == PrimitiveTypeWrapper.DOUBLE)
+		if (returnType == PrimitiveTypeWrapper.DOUBLE)
 		{
 			ilGenerator.Emit(OpCodes.Conv_R8);
 		}
@@ -3562,11 +3538,7 @@ sealed class Compiler
 		if (kind == ClassFile.RefKind.putField || kind == ClassFile.RefKind.putStatic)
 		{
 			fieldType.EmitConvStackTypeToSignatureType(ilGenerator, ma.GetStackTypeWrapper(i, 0));
-			if (strictfp)
-			{
-				// no need to convert
-			}
-			else if (fieldType == PrimitiveTypeWrapper.DOUBLE)
+			if (fieldType == PrimitiveTypeWrapper.DOUBLE)
 			{
 				ilGenerator.Emit(OpCodes.Conv_R8);
 			}
