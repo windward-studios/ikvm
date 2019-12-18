@@ -135,6 +135,19 @@ namespace jessielesbian.IKVM
                                 prev = GetInstuction(NormalizedByteCode.__pop);
                                 optimizations = optimizations + 1;
                                 break;
+                            case NormalizedByteCode.__dup:
+                                prev = GetInstuction(NormalizedByteCode.__nop);
+                                current = GetInstuction(NormalizedByteCode.__nop);
+                                optimizations = optimizations + 1;
+                                break;
+                            case NormalizedByteCode.__aload:
+                                prev = GetInstuction(NormalizedByteCode.__nop);
+                                current = GetInstuction(NormalizedByteCode.__nop);
+                                break;
+                            case NormalizedByteCode.__aaload:
+                                prev = GetInstuction(NormalizedByteCode.__pop);
+                                current = GetInstuction(NormalizedByteCode.__pop);
+                                break;
                             default:
                                 break;
                         }
@@ -232,6 +245,39 @@ namespace jessielesbian.IKVM
                             case NormalizedByteCode.__fmul:
                             case NormalizedByteCode.__dmul:
                                 prev = GetInstuction(NormalizedByteCode.__nop);
+                                optimizations = optimizations + 1;
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+                    if (current.NormalizedOpCode == NormalizedByteCode.__swap && prev.NormalizedOpCode == NormalizedByteCode.__dup)
+                    {
+                        current = GetInstuction(NormalizedByteCode.__nop);
+                        optimizations = optimizations + 1;
+                    }
+                    //peephole optimization: local variable acession optimization
+                    if (current.NormalizedOpCode == prev.NormalizedOpCode && current.NormalizedOpCode == NormalizedByteCode.__aload && current.NormalizedArg1 == prev.NormalizedArg1)
+                    {
+                        current = GetInstuction(NormalizedByteCode.__dup);
+                        optimizations = optimizations + 1;
+                    }
+                    if (current.NormalizedOpCode == prev.NormalizedOpCode && current.NormalizedOpCode == NormalizedByteCode.__astore && current.NormalizedArg1 == prev.NormalizedArg1)
+                    {
+                        prev = GetInstuction(NormalizedByteCode.__pop);
+                        optimizations = optimizations + 1;
+                    }
+                    //peephole optimization: return optimization
+                    if (current.NormalizedOpCode == NormalizedByteCode.__return)
+                    {
+                        switch (prev.NormalizedOpCode)
+                        {
+                            case NormalizedByteCode.__dup:
+                                prev = GetInstuction(NormalizedByteCode.__nop);
+                                optimizations = optimizations + 1;
+                                break;
+                            case NormalizedByteCode.__swap:
+                                prev = GetInstuction(NormalizedByteCode.__pop);
                                 optimizations = optimizations + 1;
                                 break;
                             default:
