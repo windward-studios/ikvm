@@ -28,6 +28,10 @@
  + Added ikvmw.exe - the IKVM equivalent of javaw.exe
  + Fixed a few bugs using code by @ikvm-revived
  + Changed OpenJDK library build behavior
+ + STRICT Floating Point
+ + precompilation optimizations
+ + NEW IKVMC option: -preoptimize
+ + NEW IKVM/IKVMW option: -Xpreoptimize
 
 ## List of changes Jessie Lesbian want to make
 
@@ -39,7 +43,7 @@
 
 step 1: extract the repository
 
-step 2: add your MSVC and .NET toolchains to your path environmental variable
+step 2: make sure that you have the Microsoft.NET SDKs installed
 
 step 3: run build.bat
 
@@ -47,10 +51,12 @@ NOTE: The built-in NANT tool may not work if you extract using windows explorer'
 
 If you hate building or can't build, don't worry, you will still experience the Java Virtual Machine made in C#. The cute-looking Jessie Lesbian had built all of this herself just in case you don't want to or can't build.
 
-[download](https://github.com/jessielesbian/ikvm/releases/download/8.5.2.0/ikvm_8.5.2.0_bin_windows.zip)
+[download](https://github.com/jessielesbian/ikvm/releases/download/8.6.1.0/ikvm_8.6.1.0_bin_windows.zip)
 
 If you have a problem or an opinion, please send an email to jessielesbian@protonmail.com or go to https://www.reddit.com/r/IKVM/.
 
 ## About OpenJDK.NET: The OpenJDK port for Microsoft.NET made by Jessie Lesbian
 
 OpenJDK.NET is an OpenJDK port for Microsoft.NET made by Jessie Lesbian. It contains 6 JDK tools: javac, javah, javap, jar, native2ascii, and rmic. It is currently an experimental feature and may not work.
+
+OpenJDK.NET enables IKVM to be used as a drop-in Java Development Kit. It is shipped with all Jessie Lesbian IKVM releases except the first one.
