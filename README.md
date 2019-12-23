@@ -1,5 +1,7 @@
 # Jessie Lesbian's IKVM.NET fork (aka Jessie Lesbian's cute-looking .NET-based Java Virtual Machine)
 
+###### Proudly made by LGBT Programmers.
+
 ## List of changes Jessie Lesbian made
 
  + Mono fork of IKVM.reflect
