@@ -1,6 +1,6 @@
 # Jessie Lesbian's IKVM.NET fork (aka Jessie Lesbian's cute-looking .NET-based Java Virtual Machine)
 
-###### Proudly made by LGBT Programmers.
+![ikvmbadge](https://raw.githubusercontent.com/jessielesbian/ikvm/master/ikvmbadge.png)
 
 ## List of changes Jessie Lesbian made
 
