@@ -14,6 +14,7 @@ namespace jessielesbian.IKVM
         {
             get
             {
+                
                 return (optpasses > 0);
             }
         }
@@ -35,6 +36,85 @@ namespace jessielesbian.IKVM
             instruction.PatchOpCode(bc, arg1, arg2);
             return instruction;
         }
+        private static bool IsBranchInstruction(Instruction instruction)
+        {
+            switch (instruction.NormalizedOpCode)
+            {
+                case NormalizedByteCode.__goto:
+                case NormalizedByteCode.__goto_finally:
+                case NormalizedByteCode.__ifeq:
+                case NormalizedByteCode.__ifge:
+                case NormalizedByteCode.__ifgt:
+                case NormalizedByteCode.__ifle:
+                case NormalizedByteCode.__iflt:
+                case NormalizedByteCode.__ifne:
+                case NormalizedByteCode.__ifnonnull:
+                case NormalizedByteCode.__ifnull:
+                case NormalizedByteCode.__if_acmpeq:
+                case NormalizedByteCode.__if_acmpne:
+                case NormalizedByteCode.__if_icmpeq:
+                case NormalizedByteCode.__if_icmpge:
+                case NormalizedByteCode.__if_icmpgt:
+                case NormalizedByteCode.__if_icmple:
+                case NormalizedByteCode.__if_icmplt:
+                case NormalizedByteCode.__if_icmpne:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        private static bool IsLoadInstruction(Instruction instruction)
+        {
+            switch (instruction.NormalizedOpCode)
+            {
+                case NormalizedByteCode.__aload:
+                case NormalizedByteCode.__iload:
+                case NormalizedByteCode.__lload:
+                case NormalizedByteCode.__dload:
+                case NormalizedByteCode.__fload:
+                case NormalizedByteCode.__aconst_null:
+                case NormalizedByteCode.__iconst:
+                case NormalizedByteCode.__lconst_0:
+                case NormalizedByteCode.__lconst_1:
+                case NormalizedByteCode.__dconst_0:
+                case NormalizedByteCode.__dconst_1:
+                case NormalizedByteCode.__fconst_0:
+                case NormalizedByteCode.__fconst_1:
+                case NormalizedByteCode.__fconst_2:
+                case NormalizedByteCode.__ldc:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        private static bool IsArrayLoadInstruction(Instruction instruction)
+        {
+            switch (instruction.NormalizedOpCode)
+            {
+                case NormalizedByteCode.__aaload:
+                case NormalizedByteCode.__iaload:
+                case NormalizedByteCode.__laload:
+                case NormalizedByteCode.__daload:
+                case NormalizedByteCode.__faload:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        private static bool IsStoreInstruction(Instruction instruction)
+        {
+            switch (instruction.NormalizedOpCode)
+            {
+                case NormalizedByteCode.__astore:
+                case NormalizedByteCode.__istore:
+                case NormalizedByteCode.__lstore:
+                case NormalizedByteCode.__dstore:
+                case NormalizedByteCode.__fstore:
+                    return true;
+                default:
+                    return false;
+            }
+        }
         internal static Instruction[] Optimize(Instruction[] instructions)
         {
             //Jessie Lesbian's IKVM.NET JIT Optimizer
@@ -45,30 +125,9 @@ namespace jessielesbian.IKVM
             List<int> brtargets = new List<int>(instructions.Length);
             for (int i = 1; i < instructions.Length; i++)
             {
-                switch (instructions[i].NormalizedOpCode)
+                if (IsBranchInstruction(instructions[i]))
                 {
-                    case NormalizedByteCode.__goto:
-                    case NormalizedByteCode.__goto_finally:
-                    case NormalizedByteCode.__ifeq:
-                    case NormalizedByteCode.__ifge:
-                    case NormalizedByteCode.__ifgt:
-                    case NormalizedByteCode.__ifle:
-                    case NormalizedByteCode.__iflt:
-                    case NormalizedByteCode.__ifne:
-                    case NormalizedByteCode.__ifnonnull:
-                    case NormalizedByteCode.__ifnull:
-                    case NormalizedByteCode.__if_acmpeq:
-                    case NormalizedByteCode.__if_acmpne:
-                    case NormalizedByteCode.__if_icmpeq:
-                    case NormalizedByteCode.__if_icmpge:
-                    case NormalizedByteCode.__if_icmpgt:
-                    case NormalizedByteCode.__if_icmple:
-                    case NormalizedByteCode.__if_icmplt:
-                    case NormalizedByteCode.__if_icmpne:
-                        brtargets.Add(instructions[i].TargetIndex);
-                        break;
-                    default:
-                        continue;
+                    brtargets.Add(i);
                 }
             }
             while (optimizations != 0)
@@ -76,6 +135,15 @@ namespace jessielesbian.IKVM
                 optimizations = 0;
                 for (int i = 1; i < instructions.Length; i++)
                 {
+                    int prevIndex = i - 1;
+                    while (prevIndex > 0 || instructions[prevIndex].NormalizedOpCode == NormalizedByteCode.__nop)
+                    {
+                        prevIndex--;
+                    }
+                    if (brtargets.Contains(prevIndex) || IsBranchInstruction(instructions[prevIndex]))
+                    {
+                        continue;
+                    }
                     Instruction current = instructions[i];
                     Instruction prev = instructions[i - 1];
                     if (brtargets.Contains(i))
@@ -90,7 +158,7 @@ namespace jessielesbian.IKVM
                     {
                         continue;
                     }
-                    //peephole optimization: removal of unused arithmethc operations
+                    //peephole optimization: anihilation of pops
                     if (current.NormalizedOpCode == NormalizedByteCode.__pop)
                     {
                         switch (prev.NormalizedOpCode)
@@ -135,20 +203,21 @@ namespace jessielesbian.IKVM
                                 prev = GetInstuction(NormalizedByteCode.__pop);
                                 optimizations = optimizations + 1;
                                 break;
-                            case NormalizedByteCode.__dup:
+                            case NormalizedByteCode.__anewarray:
                                 prev = GetInstuction(NormalizedByteCode.__nop);
-                                current = GetInstuction(NormalizedByteCode.__nop);
-                                optimizations = optimizations + 1;
-                                break;
-                            case NormalizedByteCode.__aload:
-                                prev = GetInstuction(NormalizedByteCode.__nop);
-                                current = GetInstuction(NormalizedByteCode.__nop);
-                                break;
-                            case NormalizedByteCode.__aaload:
-                                prev = GetInstuction(NormalizedByteCode.__pop);
-                                current = GetInstuction(NormalizedByteCode.__pop);
                                 break;
                             default:
+                                if (IsBranchInstruction(prev))
+                                {
+                                    prev = GetInstuction(NormalizedByteCode.__nop);
+                                    current = GetInstuction(NormalizedByteCode.__nop);
+                                    optimizations = optimizations + 1;
+                                }
+                                if (IsArrayLoadInstruction(prev))
+                                {
+                                    prev = GetInstuction(NormalizedByteCode.__pop);
+                                    optimizations = optimizations + 1;
+                                }
                                 break;
                         }
                     }
@@ -170,10 +239,21 @@ namespace jessielesbian.IKVM
                                 break;
                         }
                     }
-                    //peephole optimization: optimize addition and subtraction
-                    if((prev.NormalizedOpCode == NormalizedByteCode.__ineg))
+                    //peephole optimization: strength reduction
+                    if (current.NormalizedOpCode == prev.NormalizedOpCode && IsBranchInstruction(current) && current.NormalizedArg1 == prev.NormalizedArg1)
                     {
-                        if(current.NormalizedOpCode == NormalizedByteCode.__iadd)
+                        current = GetInstuction(NormalizedByteCode.__dup);
+                        optimizations = optimizations + 1;
+                    }
+                    if (current.NormalizedOpCode == prev.NormalizedOpCode && IsStoreInstruction(current) && current.NormalizedArg1 == prev.NormalizedArg1)
+                    {
+                        prev = GetInstuction(NormalizedByteCode.__pop);
+                        optimizations = optimizations + 1;
+                    }
+                    //peephole optimization: optimize addition and subtraction
+                    if ((prev.NormalizedOpCode == NormalizedByteCode.__ineg))
+                    {
+                        if (current.NormalizedOpCode == NormalizedByteCode.__iadd)
                         {
                             current = GetInstuction(NormalizedByteCode.__isub);
                             prev = GetInstuction(NormalizedByteCode.__nop);
@@ -232,7 +312,7 @@ namespace jessielesbian.IKVM
                         }
                     }
                     //peephole optimization: remove unnecessary swaps
-                    if(prev.NormalizedOpCode == NormalizedByteCode.__swap)
+                    if (prev.NormalizedOpCode == NormalizedByteCode.__swap)
                     {
                         switch (current.NormalizedOpCode)
                         {
@@ -256,17 +336,6 @@ namespace jessielesbian.IKVM
                         current = GetInstuction(NormalizedByteCode.__nop);
                         optimizations = optimizations + 1;
                     }
-                    //peephole optimization: local variable acession optimization
-                    if (current.NormalizedOpCode == prev.NormalizedOpCode && current.NormalizedOpCode == NormalizedByteCode.__aload && current.NormalizedArg1 == prev.NormalizedArg1)
-                    {
-                        current = GetInstuction(NormalizedByteCode.__dup);
-                        optimizations = optimizations + 1;
-                    }
-                    if (current.NormalizedOpCode == prev.NormalizedOpCode && current.NormalizedOpCode == NormalizedByteCode.__astore && current.NormalizedArg1 == prev.NormalizedArg1)
-                    {
-                        prev = GetInstuction(NormalizedByteCode.__pop);
-                        optimizations = optimizations + 1;
-                    }
                     //peephole optimization: return optimization
                     if (current.NormalizedOpCode == NormalizedByteCode.__return)
                     {
@@ -284,7 +353,36 @@ namespace jessielesbian.IKVM
                                 break;
                         }
                     }
-                    //sorry, I can't implement branch optimizations.
+                    //branch optimizations
+                    if(prev.NormalizedOpCode == NormalizedByteCode.__aconst_null)
+                    {
+                        if(current.NormalizedOpCode == NormalizedByteCode.__ifnull)
+                        {
+                            prev = GetInstuction(NormalizedByteCode.__nop);
+                            current.PatchOpCode(NormalizedByteCode.__goto);
+                            optimizations = optimizations + 1;
+                        }
+                        else if (current.NormalizedOpCode == NormalizedByteCode.__ifnonnull)
+                        {
+                            prev = GetInstuction(NormalizedByteCode.__nop);
+                            current = prev;
+                            optimizations = optimizations + 1;
+                        }
+                    }
+                    if(IsBranchInstruction(current))
+                    {
+                        Instruction target = instructions[current.TargetIndex];
+                        if (target.NormalizedOpCode == NormalizedByteCode.__goto)
+                        {
+                            current.TargetIndex = target.TargetIndex;
+                            optimizations = optimizations + 1;
+                        }
+                        else if(target.NormalizedOpCode == NormalizedByteCode.__nop)
+                        {
+                            current.TargetIndex++;
+                            optimizations = optimizations + 1;
+                        }
+                    }
                     instructions[i] = current;
                     instructions[i - 1] = prev;
                 }

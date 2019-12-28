@@ -819,7 +819,7 @@ sealed class Compiler
 				c.Compile(b, 0);
 				b.Leave();
 			}
-			nonleaf = c.nonleaf;
+			nonleaf = true;
 		}
 		finally
 		{
