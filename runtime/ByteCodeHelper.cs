@@ -27,6 +27,7 @@ using System.Diagnostics;
 using System.Threading;
 using IKVM.Attributes;
 using IKVM.Internal;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 namespace IKVM.Runtime
@@ -189,7 +190,7 @@ namespace IKVM.Runtime
 		{
 #if !FIRST_PASS
 			Profiler.Count("DynamicAastore");
-			((Array)arrayref).SetValue(val, index);
+			((IList<object>)arrayref)[index] = val;
 #endif
 		}
 
@@ -200,7 +201,7 @@ namespace IKVM.Runtime
 			return null;
 #else
 			Profiler.Count("DynamicAaload");
-			return ((Array)arrayref).GetValue(index);
+			return ((IList<object>)arrayref)[index];
 #endif
 		}
 

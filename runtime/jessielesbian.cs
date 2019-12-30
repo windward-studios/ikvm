@@ -1,6 +1,8 @@
 ﻿using System;
-using System.Collections.Generic;
+using IKVM.Internal;
+using System.Reflection;
 using Instruction = IKVM.Internal.ClassFile.Method.Instruction;
+using System.Collections.Generic;
 
 //Do you believe in high-quality code by Female/LGBT programmers? Leave u/jessielesbian a PM on Reddit!
 
@@ -8,13 +10,18 @@ namespace jessielesbian.IKVM
 {
     public static class Helper
     {
+        static Helper()
+        {
+            Array array = new object[0];
+            ArrayLoad = new Func<int, object>(array.GetValue).Method;
+            ArrayStore = new Action<object, int>(array.SetValue).Method;
+        }
         public static int optpasses = 0;
         public static bool enableJITPreOptimization = false;
         internal static bool experimentalOptimizations
         {
             get
             {
-                
                 return (optpasses > 0);
             }
         }
@@ -122,14 +129,6 @@ namespace jessielesbian.IKVM
 
             instructions = (Instruction[])instructions.Clone();
             int optimizations = 1279738452;
-            List<int> brtargets = new List<int>(instructions.Length);
-            for (int i = 1; i < instructions.Length; i++)
-            {
-                if (IsBranchInstruction(instructions[i]))
-                {
-                    brtargets.Add(i);
-                }
-            }
             while (optimizations != 0)
             {
                 optimizations = 0;
@@ -140,21 +139,9 @@ namespace jessielesbian.IKVM
                     {
                         prevIndex--;
                     }
-                    if (brtargets.Contains(prevIndex) || IsBranchInstruction(instructions[prevIndex]))
-                    {
-                        continue;
-                    }
                     Instruction current = instructions[i];
                     Instruction prev = instructions[i - 1];
-                    if (brtargets.Contains(i))
-                    {
-                        continue;
-                    }
-                    if (brtargets.Contains(i - 1))
-                    {
-                        continue;
-                    }
-                    if (brtargets.Contains(i + 1))
+                    if (IsBranchInstruction(current) || IsBranchInstruction(prev))
                     {
                         continue;
                     }
@@ -311,7 +298,7 @@ namespace jessielesbian.IKVM
                             optimizations = optimizations + 1;
                         }
                     }
-                    //peephole optimization: remove unnecessary swaps
+                    //peephole optimization: remove unnecessary swaps + branch optimizations
                     if (prev.NormalizedOpCode == NormalizedByteCode.__swap)
                     {
                         switch (current.NormalizedOpCode)
@@ -353,41 +340,17 @@ namespace jessielesbian.IKVM
                                 break;
                         }
                     }
-                    //branch optimizations
-                    if(prev.NormalizedOpCode == NormalizedByteCode.__aconst_null)
-                    {
-                        if(current.NormalizedOpCode == NormalizedByteCode.__ifnull)
-                        {
-                            prev = GetInstuction(NormalizedByteCode.__nop);
-                            current.PatchOpCode(NormalizedByteCode.__goto);
-                            optimizations = optimizations + 1;
-                        }
-                        else if (current.NormalizedOpCode == NormalizedByteCode.__ifnonnull)
-                        {
-                            prev = GetInstuction(NormalizedByteCode.__nop);
-                            current = prev;
-                            optimizations = optimizations + 1;
-                        }
-                    }
-                    if(IsBranchInstruction(current))
-                    {
-                        Instruction target = instructions[current.TargetIndex];
-                        if (target.NormalizedOpCode == NormalizedByteCode.__goto)
-                        {
-                            current.TargetIndex = target.TargetIndex;
-                            optimizations = optimizations + 1;
-                        }
-                        else if(target.NormalizedOpCode == NormalizedByteCode.__nop)
-                        {
-                            current.TargetIndex++;
-                            optimizations = optimizations + 1;
-                        }
-                    }
                     instructions[i] = current;
                     instructions[i - 1] = prev;
                 }
             }
             return instructions;
+        }
+        internal static readonly MethodInfo ArrayLoad;
+        internal static readonly MethodInfo ArrayStore; 
+        public static object aaload(Array array, int index)
+        {
+            return array.GetValue(index);
         }
     }
 }

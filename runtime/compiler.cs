@@ -2069,8 +2069,12 @@ sealed class Compiler
 					TypeWrapper tw = ma.GetRawStackTypeWrapper(i, 1);
 					if(tw.IsUnloadable)
 					{
+						#if STATIC_COMPILER
 						Profiler.Count("EmitDynamicAaload");
 						ilGenerator.Emit(OpCodes.Call, ByteCodeHelperMethods.DynamicAaload);
+						#else
+						ilGenerator.Emit(OpCodes.Callvirt, Helper.ArrayLoad);
+						#endif
 					}
 					else
 					{
@@ -2141,8 +2145,12 @@ sealed class Compiler
 					TypeWrapper tw = ma.GetRawStackTypeWrapper(i, 2);
 					if(tw.IsUnloadable)
 					{
+						#if STATIC_COMPILER
 						Profiler.Count("EmitDynamicAastore");
 						ilGenerator.Emit(OpCodes.Call, ByteCodeHelperMethods.DynamicAastore);
+						#else
+						ilGenerator.Emit(OpCodes.Callvirt, Helper.ArrayLoad);
+						#endif
 					}
 					else
 					{
