@@ -2309,6 +2309,7 @@ namespace IKVM.Internal
 				List<int> prevcodes = new List<int>(code.Capacity);
 				for (int i = 0; (i < Helper.optpasses) || (!prevcodes.Contains(code.GetHashCode()) && Helper.extremeOptimizations); i++)
 				{
+					prevcodes.Add(code.GetHashCode());
 					RemoveJumpNext();
 					CheckInvariants();
 					ChaseBranches();
@@ -2333,7 +2334,6 @@ namespace IKVM.Internal
 					CheckInvariants();
 					RemoveDeadCode();
 					CheckInvariants();
-					prevcodes.Add(code.GetHashCode());
 				}
 			}
 			OptimizeEncodings();
