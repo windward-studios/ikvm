@@ -489,6 +489,7 @@ sealed class IkvmcCompiler
 		Console.Error.WriteLine("-strictfinalfieldsemantics     Don't allow final fields to be modified outside");
 		Console.Error.WriteLine("                               of initializer methods");
 		Console.Error.WriteLine("-optimize:n                    Enable IKVM.NET experimental optimizations and use N passes of optimization");
+		Console.Error.WriteLine("-extremeoptimize               Enable extreme usage of IKVM.NET experimental optimizations optimizations");
 		Console.Error.WriteLine("-preoptimize                   Enable precompilation optimizations");
 		Console.Error.WriteLine();
 		Console.Error.WriteLine("                      - ERRORS AND WARNINGS -");
@@ -1025,6 +1026,10 @@ sealed class IkvmcCompiler
 					} catch{
 						Console.Error.WriteLine("SORRY, IKVM.NET experimental optimizations disabled, reason: negative or invalid number of optimization passes.");
 					}
+				}
+				else if(s == "-extremeoptimize")
+				{
+					Helper.extremeOptimizations = true;
 				}
 				else if(s == "-preoptimize")
 				{

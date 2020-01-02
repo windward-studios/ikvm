@@ -190,7 +190,7 @@ namespace IKVM.Runtime
 		{
 #if !FIRST_PASS
 			Profiler.Count("DynamicAastore");
-			((IList<object>)arrayref)[index] = val;
+			((Array)arrayref).SetValue(val, index);
 #endif
 		}
 
@@ -201,7 +201,7 @@ namespace IKVM.Runtime
 			return null;
 #else
 			Profiler.Count("DynamicAaload");
-			return ((IList<object>)arrayref)[index];
+			return ((Array)arrayref).GetValue(index);
 #endif
 		}
 

@@ -10,11 +10,11 @@
   freely, subject to the following restrictions:
 
   1. The origin of this software must not be misrepresented; you must not
-     claim that you wrote the original software. If you use this software
-     in a product, an acknowledgment in the product documentation would be
-     appreciated but is not required.
+	 claim that you wrote the original software. If you use this software
+	 in a product, an acknowledgment in the product documentation would be
+	 appreciated but is not required.
   2. Altered source versions must be plainly marked as such, and must not be
-     misrepresented as being the original software.
+	 misrepresented as being the original software.
   3. This notice may not be removed or altered from any source distribution.
 
   Jeroen Frijters
@@ -36,6 +36,7 @@ using System.Reflection.Emit;
 using System.Runtime.InteropServices;
 using System.Diagnostics.SymbolStore;
 using System.Diagnostics;
+using jessielesbian.IKVM;
 
 namespace IKVM.Internal
 {
@@ -98,13 +99,14 @@ namespace IKVM.Internal
 
 	sealed class CodeEmitter
 	{
+		private bool optimized = false;
 		private static readonly MethodInfo objectToString = Types.Object.GetMethod("ToString", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null);
 		private static readonly MethodInfo verboseCastFailure = JVM.SafeGetEnvironmentVariable("IKVM_VERBOSE_CAST") == null ? null : ByteCodeHelperMethods.VerboseCastFailure;
 		private static readonly MethodInfo monitorEnter = JVM.Import(typeof(System.Threading.Monitor)).GetMethod("Enter", BindingFlags.Public | BindingFlags.Static, null, new Type[] { Types.Object }, null);
 		private static readonly MethodInfo monitorExit = JVM.Import(typeof(System.Threading.Monitor)).GetMethod("Exit", BindingFlags.Public | BindingFlags.Static, null, new Type[] { Types.Object }, null);
 		private static bool experimentalOptimizations {
 			get {
-				return jessielesbian.IKVM.Helper.experimentalOptimizations;
+				return Helper.experimentalOptimizations;
 			}
 		}
 		private static MethodInfo memoryBarrier;
@@ -121,7 +123,6 @@ namespace IKVM.Internal
 #if LABELCHECK
 		private Dictionary<CodeEmitterLabel, System.Diagnostics.StackFrame> labels = new Dictionary<CodeEmitterLabel, System.Diagnostics.StackFrame>();
 #endif
-		private bool optimized = false;
 		enum CodeType : short
 		{
 			Unreachable,
@@ -1261,7 +1262,7 @@ namespace IKVM.Internal
 			/*
 			 * Here we do a couple of different optimizations to unconditional branches:
 			 *  - a branch to a ret or endfinally will be replaced
-			 *    by the ret or endfinally instruction (because that is always at least as efficient)
+			 *	by the ret or endfinally instruction (because that is always at least as efficient)
 			 *  - a branch to a branch will remove the indirection
 			 *  - a leave to a branch or leave will remove the indirection
 			 */
@@ -2121,9 +2122,9 @@ namespace IKVM.Internal
 				//
 				// This means we only have to detect these specific patterns:
 				//
-				//   ldc.i8 0x0        ldarg
-				//   ldarg             ldc.i8 0x0
-				//   beq/bne           beq/bne
+				//   ldc.i8 0x0		ldarg
+				//   ldarg			 ldc.i8 0x0
+				//   beq/bne		   beq/bne
 				//
 				// The workaround is to replace ldarg with ldarga/ldind.i8. Looking at the generated code by the x86 and x64 JITs
 				// this appears to be as efficient as the ldarg and it avoids the x64 bug.
@@ -2165,22 +2166,22 @@ namespace IKVM.Internal
 			 * This is a stronger invariant than requirement by MSIL, because
 			 * we also disallow the following sequence:
 			 * 
-			 *    Br Label0
-			 *    ...
-			 *    BeginExceptionBlock
-			 *    Label0:
-			 *    ...
-			 *    Br Label0
-			 *    
+			 *	Br Label0
+			 *	...
+			 *	BeginExceptionBlock
+			 *	Label0:
+			 *	...
+			 *	Br Label0
+			 *	
 			 * This should be rewritten as:
 			 * 
-			 *    Br Label0
-			 *    ...
-			 *    Label0:
-			 *    BeginExceptionBlock
-			 *    Label1:
-			 *    ...
-			 *    Br Label1
+			 *	Br Label0
+			 *	...
+			 *	Label0:
+			 *	BeginExceptionBlock
+			 *	Label1:
+			 *	...
+			 *	Br Label1
 			 */
 			int blockId = 0;
 			int nextBlockId = 1;
@@ -2305,7 +2306,8 @@ namespace IKVM.Internal
 			{
 				CheckInvariants();
 				MoveLocalDeclarationToBeginScope();
-				for (int i = 0; i < jessielesbian.IKVM.Helper.optpasses; i++)
+				List<int> prevcodes = new List<int>(code.Capacity);
+				for (int i = 0; (i < Helper.optpasses) || (!prevcodes.Contains(code.GetHashCode()) && Helper.extremeOptimizations); i++)
 				{
 					RemoveJumpNext();
 					CheckInvariants();
@@ -2331,6 +2333,7 @@ namespace IKVM.Internal
 					CheckInvariants();
 					RemoveDeadCode();
 					CheckInvariants();
+					prevcodes.Add(code.GetHashCode());
 				}
 			}
 			OptimizeEncodings();

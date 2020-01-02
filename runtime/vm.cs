@@ -35,7 +35,6 @@ using System.Text;
 using System.Security;
 using System.Security.Permissions;
 using IKVM.Internal;
-using System.Collections.Generic;
 
 #if !STATIC_COMPILER && !STUB_GENERATOR
 namespace IKVM.Internal
