@@ -1,12 +1,19 @@
 ﻿using System;
 using IKVM.Internal;
 using System.Reflection;
+using System.Reflection.Emit;
 using Instruction = IKVM.Internal.ClassFile.Method.Instruction;
 
 //Do you believe in high-quality code by Female/LGBT programmers? Leave u/jessielesbian a PM on Reddit!
 
+[assembly: jessielesbian.IKVM.MadeByLGBTProgrammers]
+
 namespace jessielesbian.IKVM
 {
+	public class MadeByLGBTProgrammersAttribute : Attribute
+	{
+
+	}
 	public static class Helper
 	{
 		static Helper()
@@ -22,7 +29,7 @@ namespace jessielesbian.IKVM
 		{
 			get
 			{
-				return (optpasses > 0);
+				return (optpasses > 0) || extremeOptimizations;
 			}
 		}
 		private static Instruction GetInstuction(NormalizedByteCode bc)
@@ -311,7 +318,7 @@ namespace jessielesbian.IKVM
 							optimizations = optimizations + 1;
 						}
 					}
-					//peephole optimization: remove unnecessary swaps + branch optimizations
+					//peephole optimization: remove unnecessary swaps
 					if (prev.NormalizedOpCode == NormalizedByteCode.__swap)
 					{
 						switch (current.NormalizedOpCode)
@@ -336,23 +343,6 @@ namespace jessielesbian.IKVM
 						current = GetInstuction(NormalizedByteCode.__nop);
 						optimizations = optimizations + 1;
 					}
-					//peephole optimization: return optimization
-					if (current.NormalizedOpCode == NormalizedByteCode.__return)
-					{
-						switch (prev.NormalizedOpCode)
-						{
-							case NormalizedByteCode.__dup:
-								prev = GetInstuction(NormalizedByteCode.__nop);
-								optimizations = optimizations + 1;
-								break;
-							case NormalizedByteCode.__swap:
-								prev = GetInstuction(NormalizedByteCode.__pop);
-								optimizations = optimizations + 1;
-								break;
-							default:
-								break;
-						}
-					}
 					instructions[i] = current;
 					instructions[prevIndex] = prev;
 				}
@@ -360,10 +350,6 @@ namespace jessielesbian.IKVM
 			return instructions;
 		}
 		internal static readonly MethodInfo ArrayLoad;
-		internal static readonly MethodInfo ArrayStore; 
-		public static object aaload(Array array, int index)
-		{
-			return array.GetValue(index);
-		}
+		internal static readonly MethodInfo ArrayStore;
 	}
 }

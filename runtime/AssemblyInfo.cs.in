@@ -55,3 +55,5 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("IKVM.OpenJDK.Remoting")]
 [assembly: InternalsVisibleTo("IKVM.OpenJDK.SwingAWT")]
 #endif
+[assembly: InternalsVisibleTo("ikvm2")]
+[assembly: InternalsVisibleTo("ikvmc2")]
