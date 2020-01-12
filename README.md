@@ -53,7 +53,7 @@ NOTE: The built-in NANT tool may not work if you extract using windows explorer'
 
 If you hate building or can't build, don't worry, you will still experience the Java Virtual Machine made in C#. The cute-looking Jessie Lesbian had built all of this herself just in case you don't want to or can't build.
 
-[download](https://github.com/jessielesbian/ikvm/releases/download/8.6.5.0/ikvm_8.6.5.0_bin_windows.zip)
+[download](https://github.com/jessielesbian/ikvm/releases/download/8.6.5.1/ikvm_8.6.5.1_bin_windows.zip)
 
 If you have a problem or an opinion, please send an email to jessielesbian@protonmail.com or go to https://www.reddit.com/r/IKVM/.
 
