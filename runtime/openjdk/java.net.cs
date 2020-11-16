@@ -28,7 +28,7 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Security;
 
-static class Java_java_net_AbstractPlainDatagramSocketImpl
+public static class Java_java_net_AbstractPlainDatagramSocketImpl
 {
 	public static void init()
 	{
@@ -58,14 +58,14 @@ static class Java_java_net_AbstractPlainDatagramSocketImpl
 	}
 }
 
-static class Java_java_net_DatagramPacket
+public static class Java_java_net_DatagramPacket
 {
 	public static void init()
 	{
 	}
 }
 
-static class Java_java_net_InetAddress
+public static class Java_java_net_InetAddress
 {
 	public static void init()
 	{
@@ -86,7 +86,7 @@ static class Java_java_net_InetAddress
 #endif
 }
 
-static class Java_java_net_InetAddressImplFactory
+public static class Java_java_net_InetAddressImplFactory
 {
 	private static readonly bool ipv6supported = Init();
 
@@ -111,14 +111,14 @@ static class Java_java_net_InetAddressImplFactory
 	}
 }
 
-static class Java_java_net_Inet4Address
+public static class Java_java_net_Inet4Address
 {
 	public static void init()
 	{
 	}
 }
 
-static class Java_java_net_Inet4AddressImpl
+public static class Java_java_net_Inet4AddressImpl
 {
 	public static string getLocalHostName(object thisInet4AddressImpl)
 	{
@@ -237,14 +237,14 @@ static class Java_java_net_Inet4AddressImpl
 	}
 }
 
-static class Java_java_net_Inet6Address
+public static class Java_java_net_Inet6Address
 {
 	public static void init()
 	{
 	}
 }
 
-static class Java_java_net_Inet6AddressImpl
+public static class Java_java_net_Inet6AddressImpl
 {
 	public static string getLocalHostName(object thisInet6AddressImpl)
 	{
@@ -374,7 +374,7 @@ static class Java_java_net_Inet6AddressImpl
 	}
 }
 
-static class Java_java_net_NetworkInterface
+public static class Java_java_net_NetworkInterface
 {
 #if !FIRST_PASS
 	private static NetworkInterfaceInfo cache;

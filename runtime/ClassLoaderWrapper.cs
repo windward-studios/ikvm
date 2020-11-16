@@ -112,7 +112,7 @@ namespace IKVM.Internal
 		protected java.lang.ClassLoader javaClassLoader;
 #endif
 #if !STUB_GENERATOR
-		private TypeWrapperFactory factory;
+		internal TypeWrapperFactory factory;
 #endif // !STUB_GENERATOR
 		private readonly Dictionary<string, TypeWrapper> types = new Dictionary<string, TypeWrapper>();
 		private readonly Dictionary<string, Thread> defineClassInProgress = new Dictionary<string, Thread>();

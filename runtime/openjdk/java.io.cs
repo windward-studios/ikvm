@@ -36,7 +36,7 @@ using System.Security.AccessControl;
 using Microsoft.Win32.SafeHandles;
 using IKVM.Internal;
 
-static class Java_java_io_Console
+public static class Java_java_io_Console
 {
 	public static string encoding()
 	{
@@ -119,7 +119,7 @@ static class Java_java_io_Console
 	}
 }
 
-static class Java_java_io_FileDescriptor
+public static class Java_java_io_FileDescriptor
 {
 	private static Converter<int, int> fsync;
 
@@ -185,7 +185,7 @@ static class Java_java_io_FileDescriptor
 	}
 }
 
-static class Java_java_io_FileInputStream
+public static class Java_java_io_FileInputStream
 {
 	public static void open0(object _this, string name, [In] java.io.FileDescriptor fd)
 	{
@@ -242,7 +242,7 @@ static class Java_java_io_FileInputStream
 	}
 }
 
-static class Java_java_io_FileOutputStream
+public static class Java_java_io_FileOutputStream
 {
 	public static void open0(object _this, string name, bool append, [In] java.io.FileDescriptor fd)
 	{
@@ -284,7 +284,7 @@ static class Java_java_io_FileOutputStream
 	}
 }
 
-static class Java_java_io_ObjectInputStream
+public static class Java_java_io_ObjectInputStream
 {
 	public static void bytesToFloats(byte[] src, int srcpos, float[] dst, int dstpos, int nfloats)
 	{
@@ -317,7 +317,7 @@ static class Java_java_io_ObjectInputStream
 	}
 }
 
-static class Java_java_io_ObjectOutputStream
+public static class Java_java_io_ObjectOutputStream
 {
 	public static void floatsToBytes(float[] src, int srcpos, byte[] dst, int dstpos, int nfloats)
 	{
@@ -459,7 +459,7 @@ namespace IKVM.Internal
 	}
 }
 
-static class Java_java_io_ObjectStreamClass
+public static class Java_java_io_ObjectStreamClass
 {
 	public static void initNative()
 	{
@@ -766,7 +766,7 @@ static class Java_java_io_ObjectStreamClass
 	}
 }
 
-static class Java_java_io_RandomAccessFile
+public static class Java_java_io_RandomAccessFile
 {
 	public static void open0(object _this, string name, int mode, [In] java.io.FileDescriptor fd, [In] int O_RDWR)
 	{
@@ -858,7 +858,7 @@ static class Java_java_io_RandomAccessFile
 	}
 }
 
-static class Java_java_io_WinNTFileSystem
+public static class Java_java_io_WinNTFileSystem
 {
 	internal const int ACCESS_READ = 0x04;
 	const int ACCESS_WRITE = 0x02;
@@ -1482,7 +1482,7 @@ static class Java_java_io_WinNTFileSystem
 	}
 }
 
-static class Java_java_io_UnixFileSystem
+public static class Java_java_io_UnixFileSystem
 {
 	public static int getBooleanAttributes0(object _this, java.io.File f)
 	{

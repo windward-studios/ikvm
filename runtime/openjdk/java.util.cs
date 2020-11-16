@@ -23,7 +23,7 @@
 */
 using System;
 
-static class Java_java_util_TimeZone
+public static class Java_java_util_TimeZone
 {
 	private static string GetCurrentTimeZoneID()
 	{

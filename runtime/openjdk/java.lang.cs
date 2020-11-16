@@ -32,7 +32,7 @@ using System.Security;
 using System.Threading;
 using IKVM.Internal;
 
-static class Java_java_lang_Class
+public static class Java_java_lang_Class
 {
 	public static java.lang.Class forName0(string name, bool initialize, java.lang.ClassLoader loader, java.lang.Class caller)
 	{
@@ -652,7 +652,7 @@ static class Java_java_lang_Class
 	}
 }
 
-static class Java_java_lang_ClassLoader
+public static class Java_java_lang_ClassLoader
 {
 	public static java.net.URL getBootstrapResource(string name)
 	{
@@ -758,7 +758,7 @@ static class Java_java_lang_ClassLoader
 	}
 }
 
-static class Java_java_lang_ClassLoader_00024NativeLibrary
+public static class Java_java_lang_ClassLoader_00024NativeLibrary
 {
 	public static void load(object thisNativeLibrary, string name, bool isBuiltin)
 	{
@@ -812,7 +812,7 @@ static class Java_java_lang_ClassLoader_00024NativeLibrary
 	}
 }
 
-static class Java_java_lang_Compiler
+public static class Java_java_lang_Compiler
 {
 	public static void initialize()
 	{
@@ -846,7 +846,7 @@ static class Java_java_lang_Compiler
 	}
 }
 
-static class Java_java_lang_Double
+public static class Java_java_lang_Double
 {
 	public static long doubleToRawLongBits(double value)
 	{
@@ -861,7 +861,7 @@ static class Java_java_lang_Double
 	}
 }
 
-static class Java_java_lang_Float
+public static class Java_java_lang_Float
 {
 	public static int floatToRawIntBits(float value)
 	{
@@ -876,7 +876,7 @@ static class Java_java_lang_Float
 	}
 }
 
-static class Java_java_lang_Package
+public static class Java_java_lang_Package
 {
 	private static Dictionary<string, string> systemPackages;
 
@@ -914,7 +914,7 @@ static class Java_java_lang_Package
 	}
 }
 
-static class Java_java_lang_ProcessEnvironment
+public static class Java_java_lang_ProcessEnvironment
 {
 	public static string environmentBlock()
 	{
@@ -932,7 +932,7 @@ static class Java_java_lang_ProcessEnvironment
 	}
 }
 
-static class Java_java_lang_Runtime
+public static class Java_java_lang_Runtime
 {
 	public static int availableProcessors(object thisRuntime)
 	{
@@ -976,7 +976,7 @@ static class Java_java_lang_Runtime
 	}
 }
 
-static class Java_java_lang_SecurityManager
+public static class Java_java_lang_SecurityManager
 {
 	// this field is set by code in the JNI assembly itself,
 	// to prevent having to load the JNI assembly when it isn't used.
@@ -1034,7 +1034,7 @@ static class Java_java_lang_SecurityManager
 	}
 }
 
-static class Java_java_lang_StrictMath
+public static class Java_java_lang_StrictMath
 {
 	public static double sin(double d)
 	{
@@ -1172,7 +1172,7 @@ static class Java_java_lang_StrictMath
 	}
 }
 
-static class Java_java_lang_System
+public static class Java_java_lang_System
 {
 	public static void registerNatives()
 	{
@@ -1239,7 +1239,7 @@ static class Java_java_lang_System
 	}
 }
 
-static class Java_java_lang_Thread
+public static class Java_java_lang_Thread
 {
 	private static readonly object mainThreadGroup;
 
@@ -1314,7 +1314,7 @@ static class Java_java_lang_Thread
 	}
 }
 
-static class Java_java_lang_ProcessImpl
+public static class Java_java_lang_ProcessImpl
 {
 	public static string mapVfsExecutable(string path)
 	{

@@ -2240,10 +2240,20 @@ sealed class Compiler
 					ilGenerator.EmitBrfalse(block.GetLabel(instr.TargetIndex));
 					break;
 				case NormalizedByteCode.__if_acmpeq:
+				#if STATIC_COMPILER
 					ilGenerator.EmitBeq(block.GetLabel(instr.TargetIndex));
+				#else
+					ilGenerator.Emit(OpCodes.Call, Helper.ObjectCheckRefEqual);
+					ilGenerator.EmitBrtrue(block.GetLabel(instr.TargetIndex));
+				#endif
 					break;
 				case NormalizedByteCode.__if_acmpne:
+				#if STATIC_COMPILER
 					ilGenerator.EmitBne_Un(block.GetLabel(instr.TargetIndex));
+				#else
+					ilGenerator.Emit(OpCodes.Call, Helper.ObjectCheckRefEqual);
+					ilGenerator.EmitBrfalse(block.GetLabel(instr.TargetIndex));
+				#endif
 					break;
 				case NormalizedByteCode.__goto:
 				case NormalizedByteCode.__goto_finally:
@@ -2827,7 +2837,15 @@ sealed class Compiler
 				ilgen.EmitLdc_I8(classFile.GetConstantPoolConstantLong(constant));
 				break;
 			case ClassFile.ConstantType.String:
-				ilgen.Emit(OpCodes.Ldstr, classFile.GetConstantPoolConstantString(constant));
+				#if STATIC_COMPILER
+					ilgen.Emit(OpCodes.Ldstr, classFile.GetConstantPoolConstantString(constant));
+				#else
+					if(Helper.DisableGlobalConstantPool){
+						ilgen.Emit(OpCodes.Ldstr, classFile.GetConstantPoolConstantString(constant));
+					} else{
+						EmitGlobalConstantPoolAccess(ilgen, constant, ("This software is proudly made by LGBT programmers" + classFile.GetConstantPoolConstantString(constant)).Substring(49));
+					}
+				#endif
 				break;
 			case ClassFile.ConstantType.Class:
 				EmitLoadClass(ilgen, classFile.GetConstantPoolClassType(constant));
@@ -2840,14 +2858,39 @@ sealed class Compiler
 				break;
 #if !STATIC_COMPILER
 			case ClassFile.ConstantType.LiveObject:
-				context.EmitLiveObjectLoad(ilgen, classFile.GetConstantPoolConstantLiveObject(constant));
+				if(Helper.DisableGlobalConstantPool){
+					context.EmitLiveObjectLoad(ilgen, classFile.GetConstantPoolConstantLiveObject(constant));
+				} else{
+					EmitGlobalConstantPoolAccess(ilgen, constant, classFile.GetConstantPoolConstantLiveObject(constant));
+				}
 				break;
 #endif
 			default:
 				throw new InvalidOperationException();
 		}
-	}
 
+	}
+	private void EmitGlobalConstantPoolAccess(CodeEmitter ilgen, int constant, object obj){
+		#if !STATIC_COMPILER
+		string index = classFile.Name + "@" + constant.ToString();
+		int GlobalConstantIndex = 0;
+		bool usedOldGlobalConstantPoolItem = false;
+		lock(Helper.GlobalConstantPoolIndexer){
+			usedOldGlobalConstantPoolItem = Helper.GlobalConstantPoolIndexer.TryGetValue(index, out GlobalConstantIndex);
+			if(!usedOldGlobalConstantPoolItem){
+				GlobalConstantIndex = Helper.GlobalConstantPoolCounter++;
+				Helper.GlobalConstantPoolIndexer.Add(index, GlobalConstantIndex);
+			}
+		}
+		if(!usedOldGlobalConstantPoolItem){
+			lock(Helper.GlobalConstantPool){
+				Helper.GlobalConstantPool.Add(new SelfHashingInteger(GlobalConstantIndex), obj);
+			}
+		}
+		ilgen.EmitLdc_I4(GlobalConstantIndex);
+		ilGenerator.Emit(OpCodes.Call, Helper.GetGlobalConstantPoolItemReflected);
+		#endif
+	}
 	private void EmitDynamicCast(TypeWrapper tw)
 	{
 		Debug.Assert(tw.IsUnloadable);

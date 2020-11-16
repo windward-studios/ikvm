@@ -34,7 +34,7 @@ using System.Security;
 using System.Threading;
 using IKVM.Internal;
 
-static class Java_sun_misc_GC
+public static class Java_sun_misc_GC
 {
 	public static long maxObjectInspectionAge()
 	{
@@ -42,7 +42,7 @@ static class Java_sun_misc_GC
 	}
 }
 
-static class Java_sun_misc_MessageUtils
+public static class Java_sun_misc_MessageUtils
 {
 	public static void toStderr(string msg)
 	{
@@ -55,7 +55,7 @@ static class Java_sun_misc_MessageUtils
 	}
 }
 
-static class Java_sun_misc_MiscHelper
+public static class Java_sun_misc_MiscHelper
 {
 	public static object getAssemblyClassLoader(Assembly asm, object extcl)
 	{
@@ -67,7 +67,7 @@ static class Java_sun_misc_MiscHelper
 	}
 }
 
-static class Java_sun_misc_Signal
+public static class Java_sun_misc_Signal
 {
 	/* derived from version 6.0 VC98/include/signal.h */
 	private const int SIGINT = 2;       /* interrupt */
@@ -238,7 +238,7 @@ static class Java_sun_misc_Signal
 	}
 }
 
-static class Java_sun_misc_NativeSignalHandler
+public static class Java_sun_misc_NativeSignalHandler
 {
 	public static void handle0(int number, long handler)
 	{
@@ -246,7 +246,7 @@ static class Java_sun_misc_NativeSignalHandler
 	}
 }
 
-static class Java_sun_misc_Perf
+public static class Java_sun_misc_Perf
 {
 	public static object attach(object thisPerf, string user, int lvmid, int mode)
 	{
@@ -291,7 +291,7 @@ static class Java_sun_misc_Perf
 	}
 }
 
-static class Java_sun_misc_Unsafe
+public static class Java_sun_misc_Unsafe
 {
 	public static java.lang.reflect.Field createFieldAndMakeAccessible(java.lang.Class c, string fieldName)
 	{
@@ -684,7 +684,7 @@ static class Java_sun_misc_Unsafe
 		}
 	}
 
-	static class Stats
+	public static class Stats
 	{
 #if !FIRST_PASS && UNSAFE_STATISTICS
 		private static readonly Dictionary<string, int> dict = new Dictionary<string, int>();
@@ -733,7 +733,7 @@ static class Java_sun_misc_Unsafe
 	}
 }
 
-static class Java_sun_misc_URLClassPath
+public static class Java_sun_misc_URLClassPath
 {
 	public static java.net.URL[] getLookupCacheURLs(java.lang.ClassLoader loader)
 	{
@@ -751,7 +751,7 @@ static class Java_sun_misc_URLClassPath
 	}
 }
 
-static class Java_sun_misc_Version
+public static class Java_sun_misc_Version
 {
 	public static string getJvmSpecialVersion()
 	{
@@ -774,7 +774,7 @@ static class Java_sun_misc_Version
 	}
 }
 
-static class Java_sun_misc_VM
+public static class Java_sun_misc_VM
 {
 	public static void initialize()
 	{
@@ -815,7 +815,7 @@ static class Java_sun_misc_VM
 	}
 }
 
-static class Java_sun_misc_VMSupport
+public static class Java_sun_misc_VMSupport
 {
 	public static object initAgentProperties(object props)
 	{

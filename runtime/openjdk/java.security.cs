@@ -27,7 +27,7 @@ using System.Diagnostics;
 using System.Reflection;
 using IKVM.Internal;
 
-static class Java_java_security_AccessController
+public static class Java_java_security_AccessController
 {
 	public static object getStackAccessControlContext(java.security.AccessControlContext context, ikvm.@internal.CallerID callerID)
 	{

@@ -28,7 +28,7 @@ using FileDescriptor = java.io.FileDescriptor;
 using InetAddress = java.net.InetAddress;
 using ByteBuffer = java.nio.ByteBuffer;
 
-static class Java_sun_nio_ch_DatagramChannelImpl
+public static class Java_sun_nio_ch_DatagramChannelImpl
 {
 	public static void initIDs()
 	{
@@ -234,7 +234,7 @@ namespace IKVM.Internal.AsyncSocket
 }
 #endif
 
-static class Java_sun_nio_ch_WindowsAsynchronousServerSocketChannelImpl
+public static class Java_sun_nio_ch_WindowsAsynchronousServerSocketChannelImpl
 {
 #if !FIRST_PASS
 	sealed class Accept : IKVM.Internal.AsyncSocket.OperationBase<System.Net.Sockets.Socket>
@@ -276,7 +276,7 @@ static class Java_sun_nio_ch_WindowsAsynchronousServerSocketChannelImpl
 	}
 }
 
-static class Java_sun_nio_ch_WindowsAsynchronousSocketChannelImpl
+public static class Java_sun_nio_ch_WindowsAsynchronousSocketChannelImpl
 {
 #if !FIRST_PASS
 	sealed class Connect : IKVM.Internal.AsyncSocket.OperationBase<System.Net.IPEndPoint>
@@ -379,7 +379,7 @@ static class Java_sun_nio_ch_WindowsAsynchronousSocketChannelImpl
 
 namespace IKVM.NativeCode.sun.nio.ch
 {
-	static class SocketDispatcher
+	public static class SocketDispatcher
 	{
 		public static long read(object nd, FileDescriptor fd, ByteBuffer[] bufs, int offset, int length)
 		{
@@ -501,7 +501,7 @@ namespace IKVM.NativeCode.sun.nio.ch
 		}
 	}
 
-	static class Net
+	public static class Net
 	{
 		public static bool isIPv6Available0()
 		{
@@ -1125,7 +1125,7 @@ namespace IKVM.NativeCode.sun.nio.ch
 		}
 	}
 
-	static class ServerSocketChannelImpl
+	public static class ServerSocketChannelImpl
 	{
 		public static int accept0(object _this, FileDescriptor ssfd, FileDescriptor newfd, object isaa)
 		{
@@ -1164,7 +1164,7 @@ namespace IKVM.NativeCode.sun.nio.ch
 		}
 	}
 
-	static class SocketChannelImpl
+	public static class SocketChannelImpl
 	{
 		public static int checkConnect(FileDescriptor fd, bool block, bool ready)
 		{

@@ -27,14 +27,14 @@ using System.Reflection;
 using java.lang.management;
 #endif
 
-static class Java_sun_management_ClassLoadingImpl
+public static class Java_sun_management_ClassLoadingImpl
 {
 	public static void setVerboseClass(bool value)
 	{
 	}
 }
 
-static class Java_sun_management_FileSystemImpl
+public static class Java_sun_management_FileSystemImpl
 {
     public static void init0()
 	{
@@ -51,7 +51,7 @@ static class Java_sun_management_FileSystemImpl
 	}
 }
 
-static class Java_sun_management_GcInfoBuilder
+public static class Java_sun_management_GcInfoBuilder
 {
 	public static int getNumGcExtAttributes(object _this, object gc)
 	{
@@ -69,7 +69,7 @@ static class Java_sun_management_GcInfoBuilder
 	}
 }
 
-static class Java_sun_management_MemoryImpl
+public static class Java_sun_management_MemoryImpl
 {
 	public static object getMemoryPools0()
 	{
@@ -104,7 +104,7 @@ static class Java_sun_management_MemoryImpl
 	}
 }
 
-static class Java_sun_management_OperatingSystemImpl
+public static class Java_sun_management_OperatingSystemImpl
 {
 	private static long getComputerInfo(string property){
 #pragma warning disable 618
@@ -174,7 +174,7 @@ static class Java_sun_management_OperatingSystemImpl
 	}
 }
 
-static class Java_sun_management_ThreadImpl
+public static class Java_sun_management_ThreadImpl
 {
 	public static object getThreads()
 	{

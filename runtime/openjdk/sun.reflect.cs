@@ -45,7 +45,7 @@ namespace IKVM.Internal
 #endif
 }
 
-static class Java_sun_reflect_Reflection
+public static class Java_sun_reflect_Reflection
 {
 #if CLASSGC
 	sealed class State
@@ -186,7 +186,7 @@ static class Java_sun_reflect_Reflection
 	}
 }
 
-static class Java_sun_reflect_ReflectionFactory
+public static class Java_sun_reflect_ReflectionFactory
 {
 #if !FIRST_PASS
 	private static object ConvertPrimitive(TypeWrapper tw, object value)
@@ -2236,7 +2236,7 @@ static class Java_sun_reflect_ReflectionFactory
 	}
 }
 
-static class Java_sun_reflect_ConstantPool
+public static class Java_sun_reflect_ConstantPool
 {
 	public static int getSize0(object thisConstantPool, object constantPoolOop)
 	{

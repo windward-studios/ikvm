@@ -28,7 +28,7 @@ using System.Security;
 using System.Security.Principal;
 using System.Text;
 
-static class Java_java_util_prefs_FileSystemPreferences
+public static class Java_java_util_prefs_FileSystemPreferences
 {
 	public static int chmod(string filename, int permission)
 	{
@@ -49,7 +49,7 @@ static class Java_java_util_prefs_FileSystemPreferences
 	}
 }
 
-static class Java_java_util_prefs_WindowsPreferences
+public static class Java_java_util_prefs_WindowsPreferences
 {
 	// HACK we currently support only 16 handles at a time
 	private static readonly Microsoft.Win32.RegistryKey[] keys = new Microsoft.Win32.RegistryKey[16];
@@ -326,7 +326,7 @@ static class Java_java_util_prefs_WindowsPreferences
 	}
 }
 
-static class UACVirtualization
+public static class UACVirtualization
 {
 	private enum TOKEN_INFORMATION_CLASS
 	{

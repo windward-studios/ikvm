@@ -1402,7 +1402,7 @@
                 </body>
             </method>
         </class>
-        <class name="java.lang.Comparable" shadows="System.IComparable" modifiers="public abstract interface">
+		<class name="java.lang.Comparable" shadows="System.IComparable" modifiers="public abstract interface">
             <attribute type="IKVM.Attributes.SignatureAttribute" sig="(Ljava.lang.String;)V">
                 <parameter>&lt;T:Ljava/lang/Object;&gt;Ljava/lang/Object;</parameter>
             </attribute>
@@ -1414,7 +1414,7 @@
                 <override name="CompareTo" />
             </method>
         </class>
-        <class name="java.lang.AutoCloseable" shadows="System.IDisposable" modifiers="public abstract interface">
+		<class name="java.lang.AutoCloseable" shadows="System.IDisposable" modifiers="public abstract interface">
             <method name="close" sig="()V" modifiers="public abstract">
                 <throws class="java.lang.Exception" />
                 <override name="Dispose" />

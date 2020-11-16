@@ -1771,7 +1771,8 @@ namespace IKVM.Internal
 
 		private void OptimizeStackTransfer()
 		{
-			for (int i = 0; i < code.Count; i++)
+			int OptimizeStackTransferCC = code.Count - 4;
+			for (int i = 0; i < OptimizeStackTransferCC; i++)
 			{
 				if (code[i].opcode == OpCodes.Ldloc
 					&& code[i + 1].opcode == OpCodes.Stloc
@@ -1782,6 +1783,7 @@ namespace IKVM.Internal
 					code[i + 1] = code[i];
 					code[i] = code[i + 2];
 					code.RemoveRange(i + 2, 3);
+					OptimizeStackTransferCC = code.Count - 4;
 				}
 			}
 		}

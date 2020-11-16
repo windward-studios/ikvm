@@ -91,7 +91,7 @@ public static class Starter
 		}
 	}
 
-	[STAThread]	// NOTE this is here because otherwise SWT's RegisterDragDrop (a COM thing) doesn't work
+	[MTAThread]	// NOTE this is here because otherwise SWT's RegisterDragDrop (a COM thing) doesn't work
 	[IKVM.Attributes.HideFromJava]
 	static int Main(string[] args)
 	{
@@ -264,6 +264,10 @@ public static class Starter
                 {
                     noglobbing = true;
                 }
+				else if (arg == "-XuseLegacyConstantPool")
+                {
+                    Helper.DisableGlobalConstantPool = true;
+                }
                 else if (arg == "-XX:+AllowNonVirtualCalls")
                 {
                     IKVM.Internal.Starter.AllowNonVirtualCalls = true;
@@ -301,6 +305,11 @@ public static class Starter
 				else if(arg == "-Xpreoptimize")
 				{
 					Helper.enableJITPreOptimization = true;
+				}
+				else if(arg == "-XSDAM")
+				{
+					Helper.UseSingleDynamicAssembly = true;
+					Helper.FirstDynamicAssemblyName = "IKVM.Runtime.JIT";
 				}
                 else
                 {
@@ -449,8 +458,12 @@ public static class Starter
 		Console.Error.WriteLine("    -Xnoglobbing      Disable argument globbing");
 		Console.Error.WriteLine("    -Xverify          Enable strict class file verification");
 		Console.Error.WriteLine("    -Xoptimize:n      Enable IKVM.NET experimental optimizations and use N passes of optimization");
-		Console.Error.WriteLine("    -Xextremeoptimize Enable extreme usage of IKVM.NET experimental optimizations optimizations");
+		Console.Error.WriteLine("    -Xextremeoptimize Enable extreme usage of IKVM.NET experimental optimizations");
 		Console.Error.WriteLine("    -Xpreoptimize     Enable precompilation optimizations");
+		Console.Error.WriteLine("    -XuseLegacyConstantPool");
+		Console.Error.WriteLine("                      Use the legacy constant pool instead of the global constant pool");
+		Console.Error.WriteLine("                      NOTE: This increases performance, but may cause some applications to misbehave!");
+		Console.Error.WriteLine("    -XSDAM            Use Single Dynamic Assembly (low-security) Mode");
 		Console.Error.WriteLine();
 		Console.Error.WriteLine("The -X options are non-standard and subject to change without notice.");
 		Console.Error.WriteLine();

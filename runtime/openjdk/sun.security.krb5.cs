@@ -27,7 +27,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Security;
 
-static class Java_sun_security_krb5_Config
+public static class Java_sun_security_krb5_Config
 {
 	public static string getWindowsDirectory(bool isSystem)
 	{
@@ -39,7 +39,7 @@ static class Java_sun_security_krb5_Config
 	}
 }
 
-static class Java_sun_security_krb5_Credentials
+public static class Java_sun_security_krb5_Credentials
 {
 #if !FIRST_PASS
 	private static java.util.Date ToJavaDate(long time)
@@ -93,7 +93,7 @@ static class Java_sun_security_krb5_Credentials
 #endif
 	}
 
-    sealed class Ticket
+    public sealed class Ticket
     {
         public byte[] EncodedTicket;
         public string[] ClientNames;
@@ -105,7 +105,7 @@ static class Java_sun_security_krb5_Credentials
         public long RenewUntil;
     }
 
-	static class Win32KerberosSupport
+	public static class Win32KerberosSupport
 	{
         const int STATUS_SUCCESS = 0;
 
@@ -232,7 +232,7 @@ static class Java_sun_security_krb5_Credentials
         }
 
 		[SecuritySafeCritical]
-		internal static Ticket GetTicket()
+		public static Ticket GetTicket()
 		{
             LsaSafeHandle lsaHandle = null;
             try
@@ -341,7 +341,7 @@ static class Java_sun_security_krb5_Credentials
     }
 }
 
-static class Java_sun_security_krb5_SCDynamicStoreConfig
+public static class Java_sun_security_krb5_SCDynamicStoreConfig
 {
 	public static void installNotificationCallback()
 	{

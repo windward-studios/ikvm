@@ -36,6 +36,7 @@ using ProtectionDomain = System.Object;
 using System.Reflection;
 using System.Reflection.Emit;
 using ProtectionDomain = java.security.ProtectionDomain;
+using jessielesbian.IKVM;
 #endif
 
 namespace IKVM.Internal
@@ -431,8 +432,9 @@ namespace IKVM.Internal
 
 		private static void SaveDebugAssembly(AssemblyBuilder ab)
 		{
-			Console.Error.WriteLine("Saving '{0}'", ab.GetName().Name + ".dll");
-			ab.Save(ab.GetName().Name + ".dll");
+			string name = ab.GetName().Name + ".dll";
+			Console.Error.WriteLine("Saving '{0}'", name);
+			ab.Save(name);
 		}
 
 		internal static ModuleBuilder CreateJniProxyModuleBuilder()
@@ -541,15 +543,43 @@ namespace IKVM.Internal
 		private static ModuleBuilder CreateModuleBuilder()
 		{
 			AssemblyName name = new AssemblyName();
+			lock(Helper.IKVMSYNC){
+				if(Helper.UseSingleDynamicAssembly && Helper.FirstDynamicAssembly != null){
+					return CreateModuleBuilder(Helper.FirstDynamicAssembly, name);
+				}
+			}
 			if(JVM.IsSaveDebugImage)
 			{
-				name.Name = "ikvmdump-" + System.Threading.Interlocked.Increment(ref dumpCounter);
+				lock(Helper.IKVMSYNC){
+					if(Helper.FirstDynamicAssemblyName == ""){
+						name.Name = "ikvmdump-" + System.Threading.Interlocked.Increment(ref dumpCounter);
+					} else{
+						name.Name = Helper.FirstDynamicAssemblyName;
+						Helper.FirstDynamicAssemblyName = "";
+					}
+				}
 			}
 			else
 			{
 				name.Name = "ikvm_dynamic_assembly__" + (uint)Environment.TickCount;
 			}
 			return CreateModuleBuilder(name);
+		}
+		
+		private static ModuleBuilder CreateModuleBuilder(AssemblyBuilder assemblyBuilder, AssemblyName name)
+		{
+			AttributeHelper.SetRuntimeCompatibilityAttribute(assemblyBuilder);
+			bool debug = JVM.EmitSymbols;
+			CustomAttributeBuilder debugAttr = new CustomAttributeBuilder(typeof(DebuggableAttribute).GetConstructor(new Type[] { typeof(bool), typeof(bool) }), new object[] { true, debug });
+			assemblyBuilder.SetCustomAttribute(debugAttr);
+			lock(Helper.IKVMSYNC){
+				if(Helper.FirstDynamicAssembly == null){
+					Helper.FirstDynamicAssembly = assemblyBuilder;
+				}
+			}
+			ModuleBuilder moduleBuilder = JVM.IsSaveDebugImage ? assemblyBuilder.DefineDynamicModule(name.Name, name.Name + ".dll", debug) : assemblyBuilder.DefineDynamicModule(name.Name, debug);
+			moduleBuilder.SetCustomAttribute(new CustomAttributeBuilder(typeof(IKVM.Attributes.JavaModuleAttribute).GetConstructor(Type.EmptyTypes), new object[0]));
+			return moduleBuilder;
 		}
 
 		private static ModuleBuilder CreateModuleBuilder(AssemblyName name)
@@ -585,6 +615,11 @@ namespace IKVM.Internal
 			bool debug = JVM.EmitSymbols;
 			CustomAttributeBuilder debugAttr = new CustomAttributeBuilder(typeof(DebuggableAttribute).GetConstructor(new Type[] { typeof(bool), typeof(bool) }), new object[] { true, debug });
 			assemblyBuilder.SetCustomAttribute(debugAttr);
+			lock(Helper.IKVMSYNC){
+				if(Helper.FirstDynamicAssembly == null){
+					Helper.FirstDynamicAssembly = assemblyBuilder;
+				}
+			}
 			ModuleBuilder moduleBuilder = JVM.IsSaveDebugImage ? assemblyBuilder.DefineDynamicModule(name.Name, name.Name + ".dll", debug) : assemblyBuilder.DefineDynamicModule(name.Name, debug);
 			moduleBuilder.SetCustomAttribute(new CustomAttributeBuilder(typeof(IKVM.Attributes.JavaModuleAttribute).GetConstructor(Type.EmptyTypes), new object[0]));
 			return moduleBuilder;

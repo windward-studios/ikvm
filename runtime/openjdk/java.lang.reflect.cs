@@ -25,7 +25,7 @@ using System;
 using System.Collections.Generic;
 using IKVM.Internal;
 
-static class Java_java_lang_reflect_Array
+public static class Java_java_lang_reflect_Array
 {
 #if FIRST_PASS
 	public static int getLength(object arrayObj)
@@ -658,7 +658,7 @@ static class Java_java_lang_reflect_Array
 #endif // FIRST_PASS
 }
 
-static class Java_java_lang_reflect_Proxy
+public static class Java_java_lang_reflect_Proxy
 {
 	public static object defineClass0(java.lang.ClassLoader classLoader, string name, byte[] b, int off, int len)
 	{
@@ -707,7 +707,7 @@ static class Java_java_lang_reflect_Proxy
 	}
 }
 
-static class Java_java_lang_reflect_Executable
+public static class Java_java_lang_reflect_Executable
 {
 	public static object[] getParameters0(java.lang.reflect.Executable _this)
 	{
@@ -783,7 +783,7 @@ static class Java_java_lang_reflect_Executable
 	}
 }
 
-static class Java_java_lang_reflect_Field
+public static class Java_java_lang_reflect_Field
 {
 	public static object getDeclaredAnnotationsImpl(java.lang.reflect.Field thisField)
 	{
@@ -798,7 +798,7 @@ static class Java_java_lang_reflect_Field
 	}
 }
 
-static class Java_java_lang_reflect_Method
+public static class Java_java_lang_reflect_Method
 {
 	public static object getDefaultValue(java.lang.reflect.Method thisMethod)
 	{

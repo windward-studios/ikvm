@@ -31,7 +31,7 @@ using System.Security.Cryptography;
 using System.Security.Principal;
 using IKVM.Internal;
 
-static class Java_ikvm_runtime_Startup
+public static class Java_ikvm_runtime_Startup
 {
 	// this method is called from ikvm.runtime.Startup.exitMainThread() and from JNI's DetachCurrentThread
 	public static void jniDetach()
@@ -47,7 +47,7 @@ static class Java_ikvm_runtime_Startup
 	}
 }
 
-static class Java_java_lang_ref_Reference
+public static class Java_java_lang_ref_Reference
 {
 	public static bool noclassgc()
 	{
@@ -59,7 +59,7 @@ static class Java_java_lang_ref_Reference
 	}
 }
 
-static class Java_java_util_logging_FileHandler
+public static class Java_java_util_logging_FileHandler
 {
 	public static bool isSetUID()
 	{
@@ -68,7 +68,7 @@ static class Java_java_util_logging_FileHandler
 	}
 }
 
-static class Java_java_util_jar_JarFile
+public static class Java_java_util_jar_JarFile
 {
 	public static string[] getMetaInfEntryNames(object thisJarFile)
 	{
@@ -95,7 +95,7 @@ static class Java_java_util_jar_JarFile
 	}
 }
 
-static class Java_java_util_zip_ClassStubZipEntry
+public static class Java_java_util_zip_ClassStubZipEntry
 {
 	public static void expandIkvmClasses(object _zipFile, object _entries)
 	{
@@ -134,42 +134,42 @@ static class Java_java_util_zip_ClassStubZipEntry
 	}
 }
 
-static class Java_java_awt_Choice
+public static class Java_java_awt_Choice
 {
 	public static void initIDs()
 	{
 	}
 }
 
-static class Java_sun_awt_image_ByteComponentRaster
+public static class Java_sun_awt_image_ByteComponentRaster
 {
 	public static void initIDs()
 	{
 	}
 }
 
-static class Java_sun_awt_image_BytePackedRaster
+public static class Java_sun_awt_image_BytePackedRaster
 {
 	public static void initIDs()
 	{
 	}
 }
 
-static class Java_sun_awt_image_IntegerComponentRaster
+public static class Java_sun_awt_image_IntegerComponentRaster
 {
 	public static void initIDs()
 	{
 	}
 }
 
-static class Java_sun_awt_image_ShortComponentRaster
+public static class Java_sun_awt_image_ShortComponentRaster
 {
 	public static void initIDs()
 	{
 	}
 }
 
-static class Java_sun_awt_DefaultMouseInfoPeer
+public static class Java_sun_awt_DefaultMouseInfoPeer
 {
 	public static int fillPointWithCoords(object _this, object point)
 	{
@@ -182,14 +182,14 @@ static class Java_sun_awt_DefaultMouseInfoPeer
 	}
 }
 
-static class Java_sun_awt_FontDescriptor
+public static class Java_sun_awt_FontDescriptor
 {
 	public static void initIDs()
 	{
 	}
 }
 
-static class Java_sun_invoke_anon_AnonymousClassLoader
+public static class Java_sun_invoke_anon_AnonymousClassLoader
 {
 	public static java.lang.Class loadClassInternal(java.lang.Class hostClass, byte[] classFile, object[] patchArray)
 	{
@@ -197,7 +197,7 @@ static class Java_sun_invoke_anon_AnonymousClassLoader
 	}
 }
 
-static class Java_sun_invoke_util_VerifyAccess
+public static class Java_sun_invoke_util_VerifyAccess
 {
 	// called from map.xml as a replacement for Class.getClassLoader() in sun.invoke.util.VerifyAccess.isTypeVisible()
 	public static java.lang.ClassLoader Class_getClassLoader(java.lang.Class clazz)
@@ -212,7 +212,7 @@ static class Java_sun_invoke_util_VerifyAccess
 	}
 }
 
-static class Java_sun_net_PortConfig
+public static class Java_sun_net_PortConfig
 {
 	public static int getLower0()
 	{
@@ -225,7 +225,7 @@ static class Java_sun_net_PortConfig
 	}
 }
 
-static class Java_sun_net_spi_DefaultProxySelector
+public static class Java_sun_net_spi_DefaultProxySelector
 {
 	public static bool init()
 	{
@@ -239,7 +239,7 @@ static class Java_sun_net_spi_DefaultProxySelector
 	}
 }
 
-static class Java_sun_nio_fs_NetPath
+public static class Java_sun_nio_fs_NetPath
 {
 	public static string toRealPathImpl(string path)
 	{
@@ -292,7 +292,7 @@ static class Java_sun_nio_fs_NetPath
 	}
 }
 
-static class Java_sun_security_provider_NativeSeedGenerator
+public static class Java_sun_security_provider_NativeSeedGenerator
 {
 	public static bool nativeGenerateSeed(byte[] result)
 	{
@@ -312,7 +312,7 @@ static class Java_sun_security_provider_NativeSeedGenerator
 	}
 }
 
-static class Java_com_sun_java_util_jar_pack_NativeUnpack
+public static class Java_com_sun_java_util_jar_pack_NativeUnpack
 {
 	public static void initIDs()
 	{
@@ -349,7 +349,7 @@ static class Java_com_sun_java_util_jar_pack_NativeUnpack
 	}
 }
 
-static class Java_com_sun_security_auth_module_NTSystem
+public static class Java_com_sun_security_auth_module_NTSystem
 {
 	public static void getCurrent(object thisObj, bool debug, ref string userName, ref string domain, ref string domainSID, ref string userSID, ref string[] groupIDs, ref string primaryGroupID)
 	{
@@ -375,7 +375,7 @@ static class Java_com_sun_security_auth_module_NTSystem
 	}
 }
 
-static class Java_com_sun_media_sound_JDK13Services
+public static class Java_com_sun_media_sound_JDK13Services
 {
 	public static string getDefaultProviderClassName(object deviceClass)
 	{
@@ -397,134 +397,134 @@ static class Java_com_sun_media_sound_JDK13Services
 	}
 }
 
-static class Java_java_awt_AWTEvent
+public static class Java_java_awt_AWTEvent
 {
 	public static void initIDs() { }
 	public static void nativeSetSource(object thisObj, object peer) { }
 }
 
-static class Java_java_awt_Button
+public static class Java_java_awt_Button
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_Checkbox
+public static class Java_java_awt_Checkbox
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_CheckboxMenuItem
+public static class Java_java_awt_CheckboxMenuItem
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_Color
+public static class Java_java_awt_Color
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_Component
+public static class Java_java_awt_Component
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_Container
+public static class Java_java_awt_Container
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_Cursor
+public static class Java_java_awt_Cursor
 {
 	public static void initIDs() { }
 	public static void finalizeImpl(Int64 pData) { }
 }
 
-static class Java_java_awt_Dialog
+public static class Java_java_awt_Dialog
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_Dimension
+public static class Java_java_awt_Dimension
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_Event
+public static class Java_java_awt_Event
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_FileDialog
+public static class Java_java_awt_FileDialog
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_Frame
+public static class Java_java_awt_Frame
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_FontMetrics
+public static class Java_java_awt_FontMetrics
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_Insets
+public static class Java_java_awt_Insets
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_KeyboardFocusManager
+public static class Java_java_awt_KeyboardFocusManager
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_Label
+public static class Java_java_awt_Label
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_Menu
+public static class Java_java_awt_Menu
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_MenuBar
+public static class Java_java_awt_MenuBar
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_MenuComponent
+public static class Java_java_awt_MenuComponent
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_MenuItem
+public static class Java_java_awt_MenuItem
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_Rectangle
+public static class Java_java_awt_Rectangle
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_Scrollbar
+public static class Java_java_awt_Scrollbar
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_ScrollPane
+public static class Java_java_awt_ScrollPane
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_ScrollPaneAdjustable
+public static class Java_java_awt_ScrollPaneAdjustable
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_SplashScreen
+public static class Java_java_awt_SplashScreen
 {
 	public static void _update(long splashPtr, int[] data, int x, int y, int width, int height, int scanlineStride) { }
 	public static bool _isVisible(long splashPtr) { return false; }
@@ -537,77 +537,77 @@ static class Java_java_awt_SplashScreen
 	public static float _getScaleFactor(long SplashPtr) { return 1; }
 }
 
-static class Java_java_awt_TextArea
+public static class Java_java_awt_TextArea
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_TextField
+public static class Java_java_awt_TextField
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_Toolkit
+public static class Java_java_awt_Toolkit
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_TrayIcon
+public static class Java_java_awt_TrayIcon
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_Window
+public static class Java_java_awt_Window
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_event_InputEvent
+public static class Java_java_awt_event_InputEvent
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_event_MouseEvent
+public static class Java_java_awt_event_MouseEvent
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_event_KeyEvent
+public static class Java_java_awt_event_KeyEvent
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_image_ColorModel
+public static class Java_java_awt_image_ColorModel
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_image_ComponentSampleModel
+public static class Java_java_awt_image_ComponentSampleModel
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_image_Kernel
+public static class Java_java_awt_image_Kernel
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_image_Raster
+public static class Java_java_awt_image_Raster
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_image_SinglePixelPackedSampleModel
+public static class Java_java_awt_image_SinglePixelPackedSampleModel
 {
 	public static void initIDs() { }
 }
 
-static class Java_java_awt_image_SampleModel
+public static class Java_java_awt_image_SampleModel
 {
 	public static void initIDs() { }
 }
 
-static class Java_sun_net_ExtendedOptionsImpl
+public static class Java_sun_net_ExtendedOptionsImpl
 {
 	public static void init()
 	{

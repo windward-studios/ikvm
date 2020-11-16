@@ -73,10 +73,9 @@
             </sources>
             <references>
                 <include name="../bin/IKVM.OpenJDK.Core.dll" asis="true" />
-                <include name="../bin/IKVM.OpenJDK.Text.dll" asis="true" />
                 <include name="../bin/IKVM.OpenJDK.SwingAWT.dll" asis="true" />
-                <include name="../bin/IKVM.OpenJDK.Media.dll" asis="true" />
-                <include name="../bin/IKVM.OpenJDK.Misc.dll" asis="true" />
+                <include name="../bin/IKVM.OpenJDK.Localization.Optimized.dll" asis="true" />
+                <include name="../bin/IKVM.OpenJDK.Dust.NG.dll" asis="true" />
                 <include name="../bin/IKVM.Runtime.dll" asis="true" />
                 <include name="${ReferencePath}/mscorlib.dll" asis="true" />
                 <include name="${ReferencePath}/System.dll" asis="true" />

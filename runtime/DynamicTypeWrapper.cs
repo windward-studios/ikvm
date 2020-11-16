@@ -1073,7 +1073,9 @@ namespace IKVM.Internal
 				// FXBUG on .NET 2.0 RTM x64 the JIT sometimes throws an InvalidProgramException while trying to inline this method,
 				// so we prevent inlining for now (it also turns out that on x86 not inlining this method actually has a positive perf impact in some cases...)
 				// http://connect.microsoft.com/VisualStudio/feedback/ViewFeedback.aspx?FeedbackID=285772
+				#if !NET_4_0
 				clinitMethod.SetImplementationFlags(clinitMethod.GetMethodImplementationFlags() | MethodImplAttributes.NoInlining);
+				#endif
 			}
 
 			private sealed class DelegateConstructorMethodWrapper : MethodWrapper

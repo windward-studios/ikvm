@@ -140,7 +140,7 @@
         <copy file="../bin/IKVM.Runtime.dll" todir="." />
         <copy file="../bin/IKVM.AWT.WinForms.dll" todir="." />
         <exec program="${project::get-base-directory()}/../bin/ikvmc.exe" useruntimeengine="true">
-        	<arg value="-assemblyattributes:commonAttributes.class"/>
+        	<arg value="-assemblyattributes:resclasses/commonAttributes.class"/>
             <arg value="-version:${VERSION}" />
             <arg value="${signoption}" />
             <arg value="-strictfinalfieldsemantics" />
@@ -151,12 +151,8 @@
             <arg value="-r:System.Core.dll" unless="${SkipSystemCoreDependency}" />
             <arg value="-r:System.Xml.dll" />
             <arg value="-r:IKVM.Runtime.dll" />
-            <!-- we already know that the JNI assembly is not available, so suppress the warning -->
-            <arg value="-nowarn:110" />
-            <arg value="-w4" />
-            <arg value="-warnaserror" />
             <!-- we need optimizations since Jessie Lesbian had waiting difficulties. -->
-            <arg value="-optimize:5" />
+            <arg value="-optimize:1" />
             <arg value="-extremeoptimize" />
             <arg value="-preoptimize" />
             <arg value="-removeassertions" />
@@ -201,8 +197,6 @@
                 <include name="IKVM.OpenJDK.*.dll" />
             </fileset>
         </copy>
-        <!-- make sure that we haven't accidentally introduced new dependencies -->
-        <exec program="${project::get-base-directory()}/../tools/depcheck.exe" commandline="response.txt dependencies.txt" useruntimeengine="true" />
     </target>
 
     <target name="tools" depends="core">

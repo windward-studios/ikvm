@@ -29,7 +29,7 @@ using IKVM.Internal;
 
 [SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
 [SecurityCritical]
-static class Java_java_nio_Bits
+public static class Java_java_nio_Bits
 {
 	public static void copyFromShortArray(object src, long srcPos, long dstAddr, long length)
 	{
@@ -212,7 +212,7 @@ static class Java_java_nio_Bits
 	}
 }
 
-static class Java_java_nio_MappedByteBuffer
+public static class Java_java_nio_MappedByteBuffer
 {
 	private static volatile int bogusField;
 

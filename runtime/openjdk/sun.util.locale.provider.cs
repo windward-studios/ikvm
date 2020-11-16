@@ -24,7 +24,7 @@
 using System;
 using System.Globalization;
 
-static class Java_sun_util_locale_provider_HostLocaleProviderAdapterImpl
+public static class Java_sun_util_locale_provider_HostLocaleProviderAdapterImpl
 {
 	private static string[][] positivePatterns = new string[][] {
         // NF_NUMBER
@@ -544,7 +544,7 @@ static class Java_sun_util_locale_provider_HostLocaleProviderAdapterImpl
 	}
 }
 
-static class JRELocaleProviderAdapter
+public static class JRELocaleProviderAdapter
 {
 	// the Java implementation is redirected via map.xml
 	internal static bool isNonENLangSupported()

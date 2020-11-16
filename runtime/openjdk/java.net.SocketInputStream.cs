@@ -27,7 +27,7 @@ using Winsock = ikvm.@internal.Winsock;
 using java.net;
 #endif
 
-static class Java_java_net_SocketInputStream
+public static class Java_java_net_SocketInputStream
 {
 	public static int socketRead0(object _this, java.io.FileDescriptor fd, byte[] b, int off, int len, int timeout)
 	{
@@ -117,7 +117,7 @@ static class Java_java_net_SocketInputStream
 	}
 }
 
-static class Java_java_net_SocketOutputStream
+public static class Java_java_net_SocketOutputStream
 {
 	public static void socketWrite0(object _this, java.io.FileDescriptor fd, byte[] data, int off, int len)
 	{

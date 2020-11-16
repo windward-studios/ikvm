@@ -34,10 +34,10 @@ using JlClass	= java.lang.Class;
 using JlInvoke	= java.lang.invoke;
 using JlReflect	= java.lang.reflect;
 
-static class Java_java_lang_invoke_DirectMethodHandle
+internal static class Java_java_lang_invoke_DirectMethodHandle
 {
 	// this is called from DirectMethodHandle.makeAllocator() via a map.xml prologue patch
-	public static DirectMethodHandle makeStringAllocator(MemberName member)
+	internal static DirectMethodHandle makeStringAllocator(MemberName member)
 	{
 #if FIRST_PASS
 		return null;
@@ -54,7 +54,7 @@ static class Java_java_lang_invoke_DirectMethodHandle
 	}
 }
 
-static class Java_java_lang_invoke_MethodHandle
+public static class Java_java_lang_invoke_MethodHandle
 {
 	public static object invokeExact(MethodHandle thisObject, object[] args)
 	{
@@ -100,7 +100,7 @@ static class Java_java_lang_invoke_MethodHandle
 	}
 }
 
-static class Java_java_lang_invoke_MethodHandleImpl
+public static class Java_java_lang_invoke_MethodHandleImpl
 {
 	// hooked up via map.xml (as a replacement for makePairwiseConvertByEditor)
 	public static MethodHandle makePairwiseConvert(MethodHandle target, MethodType srcType, bool strict, bool monobox)
@@ -149,7 +149,7 @@ static class Java_java_lang_invoke_MethodHandleImpl
 	}
 }
 
-static class Java_java_lang_invoke_MethodHandleNatives
+internal static class Java_java_lang_invoke_MethodHandleNatives
 {
 	// called from map.xml as a replacement for Class.isInstance() in JlInvoke.MethodHandleImpl.castReference()
 	public static bool Class_isInstance(JlClass clazz, object obj)

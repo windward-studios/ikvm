@@ -215,9 +215,8 @@
                 <include if="${first-pass}" name="IKVM.OpenJDK.Core.dll" asis="true" />
                 <include if="${not first-pass}" name="../bin/IKVM.Runtime.JNI.dll" asis="true" />
                 <include if="${not first-pass}" name="../bin/IKVM.OpenJDK.Core.dll" asis="true" />
-                <include if="${not first-pass}" name="../bin/IKVM.OpenJDK.Util.dll" asis="true" />
-                <include if="${not first-pass}" name="../bin/IKVM.OpenJDK.Management.dll" asis="true" />
-                <include if="${not first-pass}" name="../bin/IKVM.OpenJDK.Misc.dll" asis="true" />
+                <include if="${not first-pass}" name="../bin/IKVM.OpenJDK.RMI.Optimized.dll" asis="true" />
+                <include if="${not first-pass}" name="../bin/IKVM.OpenJDK.Dust.NG.dll" asis="true" />
                 <include name="${ReferencePath}/mscorlib.dll" />
                 <include name="${ReferencePath}/System.dll" />
                 <include name="${ReferencePath}/System.Configuration.dll" />
