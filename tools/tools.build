@@ -11,11 +11,11 @@
   freely, subject to the following restrictions:
 
   1. The origin of this software must not be misrepresented; you must not
-     claim that you wrote the original software. If you use this software
-     in a product, an acknowledgment in the product documentation would be
-     appreciated but is not required.
+	 claim that you wrote the original software. If you use this software
+	 in a product, an acknowledgment in the product documentation would be
+	 appreciated but is not required.
   2. Altered source versions must be plainly marked as such, and must not be
-     misrepresented as being the original software.
+	 misrepresented as being the original software.
   3. This notice may not be removed or altered from any source distribution.
 
   Jeroen Frijters
@@ -23,42 +23,42 @@
   
 -->
 <project name="tools" default="tools">
-    <target name="tools">
-        <csc target="exe" output="updbaseaddresses.exe" optimize="true">
-            <sources>
-                <include name="updbaseaddresses.cs" />
-            </sources>
-        </csc>
+	<target name="tools">
+		<csc target="exe" output="updbaseaddresses.exe" optimize="true">
+			<sources>
+				<include name="updbaseaddresses.cs" />
+			</sources>
+		</csc>
 
-        <csc target="exe" output="depcheck.exe" optimize="true">
-            <sources>
-                <include name="depcheck.cs" />
-            </sources>
-        </csc>
+		<csc target="exe" output="depcheck.exe" optimize="true">
+			<sources>
+				<include name="depcheck.cs" />
+			</sources>
+		</csc>
 
-        <if test="${property::exists('signed')}">
-            <property name="defs" value="${signed}" />
-        </if>
-        <property overwrite="false" name="defs" value="" />
-        <csc target="exe" output="pubkey.exe" define="${defs}" optimize="true" rebuild="true">
-            <sources>
-                <include name="pubkey.cs" />
-                <include name="../CommonAssemblyInfo.cs" />
-            </sources>
-        </csc>
-        <exec program="pubkey.exe" useruntimeengine="true" />
+		<if test="${property::exists('signed')}">
+			<property name="defs" value="${signed}" />
+		</if>
+		<property overwrite="false" name="defs" value="" />
+		<csc target="exe" output="pubkey.exe" define="${defs}" optimize="true" rebuild="true">
+			<sources>
+				<include name="pubkey.cs" />
+				<include name="../CommonAssemblyInfo.cs" />
+			</sources>
+		</csc>
+		<exec program="pubkey.exe" useruntimeengine="true" />
 
-        <csc target="exe" output="writeappconfig.exe" rebuild="true">
-            <sources>
-                <include name="writeappconfig.cs" />
-            </sources>
-        </csc>
-        <exec program="writeappconfig.exe" useruntimeengine="true" />
+		<csc target="exe" output="writeappconfig.exe" rebuild="true">
+			<sources>
+				<include name="writeappconfig.cs" />
+			</sources>
+		</csc>
+		<exec program="writeappconfig.exe" useruntimeengine="true" />
 
-        <csc target="exe" output="SourceLicenseAnalyzer.exe" rebuild="true">
-            <sources>
-                <include name="SourceLicenseAnalyzer.cs" />
-            </sources>
-        </csc>
-    </target>
+		<csc target="exe" output="SourceLicenseAnalyzer.exe" rebuild="true">
+			<sources>
+				<include name="SourceLicenseAnalyzer.cs" />
+			</sources>
+		</csc>
+	</target>
 </project>

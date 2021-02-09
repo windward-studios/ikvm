@@ -61,7 +61,7 @@
 
 static partial class fdlibm
 {
-        static double __kernel_tan(double x, double y, int iy)
+		static double __kernel_tan(double x, double y, int iy)
 		{
 			const double
 one   =  1.00000000000000000000e+00, /* 0x3FF00000, 0x00000000 */
@@ -94,65 +94,65 @@ T_11_ =
 T_12_ =
   2.59073051863633712884e-05; /* 0x3EFB2A70, 0x74BF7AD4 */
 
-        double z,r,v,w,s;
-        int ix,hx;
-        hx = __HI(x);   /* high word of x */
-        ix = hx&0x7fffffff;     /* high word of |x| */
-        if(ix<0x3e300000) {                     /* x < 2**-28 */
-          if((int)x==0) {                       /* generate inexact */
-            if (((ix | __LO(x)) | (iy + 1)) == 0)
-              return one / fabs(x);
-            else {
-              if (iy == 1)
-                return x;
-              else {    /* compute -1 / (x+y) carefully */
-                double a, t;
+		double z,r,v,w,s;
+		int ix,hx;
+		hx = __HI(x);   /* high word of x */
+		ix = hx&0x7fffffff;     /* high word of |x| */
+		if(ix<0x3e300000) {                     /* x < 2**-28 */
+		  if((int)x==0) {                       /* generate inexact */
+			if (((ix | __LO(x)) | (iy + 1)) == 0)
+			  return one / fabs(x);
+			else {
+			  if (iy == 1)
+				return x;
+			  else {    /* compute -1 / (x+y) carefully */
+				double a, t;
 
-                z = w = x + y;
-                z = __LO(z, 0);
-                v = y - (z - x);
-                t = a = -one / w;
-                t = __LO(t, 0);
-                s = one + t * z;
-                return t + a * (s + t * v);
-                }
-              }
-          }
-        }
-        if(ix>=0x3FE59428) {                    /* |x|>=0.6744 */
-            if(hx<0) {x = -x; y = -y;}
-            z = pio4-x;
-            w = pio4lo-y;
-            x = z+w; y = 0.0;
-        }
-        z       =  x*x;
-        w       =  z*z;
-    /* Break x^5*(T[1]+x^2*T[2]+...) into
-     *    x^5(T[1]+x^4*T[3]+...+x^20*T[11]) +
-     *    x^5(x^2*(T[2]+x^4*T[4]+...+x^22*[T12]))
-     */
-        r = T_1_+w*(T_3_+w*(T_5_+w*(T_7_+w*(T_9_+w*T_11_))));
-        v = z*(T_2_+w*(T_4_+w*(T_6_+w*(T_8_+w*(T_10_+w*T_12_)))));
-        s = z*x;
-        r = y + z*(s*(r+v)+y);
-        r += T_0_*s;
-        w = x+r;
-        if(ix>=0x3FE59428) {
-            v = (double)iy;
-            return (double)(1-((hx>>30)&2))*(v-2.0*(x-(w*w/(w+v)-r)));
-        }
-        if(iy==1) return w;
-        else {          /* if allow error up to 2 ulp,
-                           simply return -1.0/(x+r) here */
-     /*  compute -1.0/(x+r) accurately */
-            double a,t;
-            z  = w;
-            z = __LO(z, 0);
-            v  = r-(z - x);     /* z+v = r+x */
-            t = a  = -1.0/w;    /* a = -1.0/w */
-            t = __LO(t, 0);
-            s  = 1.0+t*z;
-            return t+a*(s+t*v);
-        }
+				z = w = x + y;
+				z = __LO(z, 0);
+				v = y - (z - x);
+				t = a = -one / w;
+				t = __LO(t, 0);
+				s = one + t * z;
+				return t + a * (s + t * v);
+				}
+			  }
+		  }
+		}
+		if(ix>=0x3FE59428) {                    /* |x|>=0.6744 */
+			if(hx<0) {x = -x; y = -y;}
+			z = pio4-x;
+			w = pio4lo-y;
+			x = z+w; y = 0.0;
+		}
+		z       =  x*x;
+		w       =  z*z;
+	/* Break x^5*(T[1]+x^2*T[2]+...) into
+	 *    x^5(T[1]+x^4*T[3]+...+x^20*T[11]) +
+	 *    x^5(x^2*(T[2]+x^4*T[4]+...+x^22*[T12]))
+	 */
+		r = T_1_+w*(T_3_+w*(T_5_+w*(T_7_+w*(T_9_+w*T_11_))));
+		v = z*(T_2_+w*(T_4_+w*(T_6_+w*(T_8_+w*(T_10_+w*T_12_)))));
+		s = z*x;
+		r = y + z*(s*(r+v)+y);
+		r += T_0_*s;
+		w = x+r;
+		if(ix>=0x3FE59428) {
+			v = (double)iy;
+			return (double)(1-((hx>>30)&2))*(v-2.0*(x-(w*w/(w+v)-r)));
+		}
+		if(iy==1) return w;
+		else {          /* if allow error up to 2 ulp,
+						   simply return -1.0/(x+r) here */
+	 /*  compute -1.0/(x+r) accurately */
+			double a,t;
+			z  = w;
+			z = __LO(z, 0);
+			v  = r-(z - x);     /* z+v = r+x */
+			t = a  = -1.0/w;    /* a = -1.0/w */
+			t = __LO(t, 0);
+			s  = 1.0+t*z;
+			return t+a*(s+t*v);
+		}
 }
 }

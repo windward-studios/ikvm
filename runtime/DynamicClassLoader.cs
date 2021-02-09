@@ -10,11 +10,11 @@
   freely, subject to the following restrictions:
 
   1. The origin of this software must not be misrepresented; you must not
-     claim that you wrote the original software. If you use this software
-     in a product, an acknowledgment in the product documentation would be
-     appreciated but is not required.
+	 claim that you wrote the original software. If you use this software
+	 in a product, an acknowledgment in the product documentation would be
+	 appreciated but is not required.
   2. Altered source versions must be plainly marked as such, and must not be
-     misrepresented as being the original software.
+	 misrepresented as being the original software.
   3. This notice may not be removed or altered from any source distribution.
 
   Jeroen Frijters
@@ -48,7 +48,7 @@ namespace IKVM.Internal
 #if !STATIC_COMPILER
 		private static AssemblyBuilder jniProxyAssemblyBuilder;
 		private static List<DynamicClassLoader> saveClassLoaders;
-		private static int dumpCounter;
+		private static int dumpCounter = 0;
 #endif // !STATIC_COMPILER
 #if STATIC_COMPILER || CLASSGC
 		private readonly Dictionary<string, TypeWrapper> dynamicTypes = new Dictionary<string, TypeWrapper>();
@@ -543,11 +543,6 @@ namespace IKVM.Internal
 		private static ModuleBuilder CreateModuleBuilder()
 		{
 			AssemblyName name = new AssemblyName();
-			lock(Helper.IKVMSYNC){
-				if(Helper.UseSingleDynamicAssembly && Helper.FirstDynamicAssembly != null){
-					return CreateModuleBuilder(Helper.FirstDynamicAssembly, name);
-				}
-			}
 			if(JVM.IsSaveDebugImage)
 			{
 				lock(Helper.IKVMSYNC){
@@ -561,7 +556,19 @@ namespace IKVM.Internal
 			}
 			else
 			{
-				name.Name = "ikvm_dynamic_assembly__" + (uint)Environment.TickCount;
+				lock(Helper.IKVMSYNC){
+					if(Helper.FirstDynamicAssemblyName == ""){
+						name.Name = "ikvm_dynamic_assembly__" + System.Threading.Interlocked.Increment(ref dumpCounter);
+					} else{
+						name.Name = Helper.FirstDynamicAssemblyName;
+						Helper.FirstDynamicAssemblyName = "";
+					}
+				}
+			}
+			lock(Helper.IKVMSYNC){
+				if(Helper.UseSingleDynamicAssembly && Helper.FirstDynamicAssembly != null){
+					return CreateModuleBuilder(Helper.FirstDynamicAssembly, name);
+				}
 			}
 			return CreateModuleBuilder(name);
 		}

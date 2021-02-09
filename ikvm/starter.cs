@@ -10,11 +10,11 @@
   freely, subject to the following restrictions:
 
   1. The origin of this software must not be misrepresented; you must not
-     claim that you wrote the original software. If you use this software
-     in a product, an acknowledgment in the product documentation would be
-     appreciated but is not required.
+	 claim that you wrote the original software. If you use this software
+	 in a product, an acknowledgment in the product documentation would be
+	 appreciated but is not required.
   2. Altered source versions must be plainly marked as such, and must not be
-     misrepresented as being the original software.
+	 misrepresented as being the original software.
   3. This notice may not be removed or altered from any source distribution.
 
   Jeroen Frijters
@@ -111,12 +111,12 @@ public static class Starter
 		bool showVersion = false;
 		string mainClass = null;
 		int vmargsIndex = -1;
-        bool debug = false;
-        String debugArg = null;
+		bool debug = false;
+		String debugArg = null;
 		bool noglobbing = false;
 		for(int i = 0; i < args.Length; i++)
 		{
-            String arg = args[i];
+			String arg = args[i];
 			if(arg[0] == '-')
 			{
 				if(arg == "-help" || arg == "-?")
@@ -190,22 +190,22 @@ public static class Starter
 				}
 				else if(arg.StartsWith("-D"))
 				{
-				    arg = arg.Substring(2);
-                    string[] keyvalue = arg.Split('=');
-				    string value;
+					arg = arg.Substring(2);
+					string[] keyvalue = arg.Split('=');
+					string value;
 					if(keyvalue.Length == 2) // -Dabc=x
 					{
-                        value = keyvalue[1];
+						value = keyvalue[1];
 					} 
-                    else if (keyvalue.Length == 1) // -Dabc
-                    {
-                        value = "";
-                    } 
-                    else // -Dabc=x=y
+					else if (keyvalue.Length == 1) // -Dabc
 					{
-                        value = arg.Substring(keyvalue[0].Length + 1);
+						value = "";
+					} 
+					else // -Dabc=x=y
+					{
+						value = arg.Substring(keyvalue[0].Length + 1);
 					}
-                    props[keyvalue[0]] = value;
+					props[keyvalue[0]] = value;
 				}
 				else if(arg == "-ea" || arg == "-enableassertions")
 				{
@@ -243,59 +243,66 @@ public static class Starter
 				{
 					Tracer.HandleMethodTrace(arg.Substring(14));
 				}
-                else if(arg == "-Xdebug")
-                {
-                    debug = true;
-                }
-                else if (arg == "-Xnoagent")
-                {
-                    //ignore it, disable support for oldjdb
-                }
-                else if (arg.StartsWith("-Xrunjdwp") || arg.StartsWith("-agentlib:jdwp"))
-                {
-                    debugArg = arg;
-                    debug = true;
-                }
-                else if (arg.StartsWith("-Xreference:"))
-                {
-                    Startup.addBootClassPathAssembly(Assembly.LoadFrom(arg.Substring(12)));
-                }
-                else if (arg == "-Xnoglobbing")
-                {
-                    noglobbing = true;
-                }
+				else if(arg == "-Xdebug")
+				{
+					debug = true;
+				}
+				else if (arg == "-Xnoagent")
+				{
+					//ignore it, disable support for oldjdb
+				}
+				else if (arg.StartsWith("-Xrunjdwp") || arg.StartsWith("-agentlib:jdwp"))
+				{
+					debugArg = arg;
+					debug = true;
+				}
+				else if (arg.StartsWith("-Xreference:"))
+				{
+					Startup.addBootClassPathAssembly(Assembly.LoadFrom(arg.Substring(12)));
+				}
+				else if (arg == "-Xnoglobbing")
+				{
+					noglobbing = true;
+				}
 				else if (arg == "-XuseLegacyConstantPool")
-                {
-                    Helper.DisableGlobalConstantPool = true;
-                }
-                else if (arg == "-XX:+AllowNonVirtualCalls")
-                {
-                    IKVM.Internal.Starter.AllowNonVirtualCalls = true;
-                }
-                else if (arg.StartsWith("-Xms")
-                    || arg.StartsWith("-Xmx")
-                    || arg.StartsWith("-Xmn")
-                    || arg.StartsWith("-Xss")
-                    || arg.StartsWith("-XX:")
-                    || arg == "-Xmixed"
-                    || arg == "-Xint"
-                    || arg == "-Xincgc"
-                    || arg == "-Xbatch"
-                    || arg == "-Xfuture"
-                    || arg == "-Xrs"
-                    || arg == "-Xcheck:jni"
-                    || arg == "-Xshare:off"
-                    || arg == "-Xshare:auto"
-                    || arg == "-Xshare:on"
-                    )
-                {
-                    Console.Error.WriteLine("Unsupported option ignored: {0}", arg);
-                }
+				{
+					Helper.DisableGlobalConstantPool = true;
+				}
+				else if (arg == "-XX:+AllowNonVirtualCalls")
+				{
+					IKVM.Internal.Starter.AllowNonVirtualCalls = true;
+				}
+				else if (arg.StartsWith("-Xms")
+					|| arg.StartsWith("-Xmx")
+					|| arg.StartsWith("-Xmn")
+					|| arg.StartsWith("-Xss")
+					|| arg.StartsWith("-XX:")
+					|| arg == "-Xmixed"
+					|| arg == "-Xint"
+					|| arg == "-Xincgc"
+					|| arg == "-Xbatch"
+					|| arg == "-Xfuture"
+					|| arg == "-Xrs"
+					|| arg == "-Xcheck:jni"
+					|| arg == "-Xshare:off"
+					|| arg == "-Xshare:auto"
+					|| arg == "-Xshare:on"
+					)
+				{
+					Console.Error.WriteLine("Unsupported option ignored: {0}", arg);
+				}
 				else if(arg.StartsWith("-Xoptimize:")){
 					try{
 						Helper.optpasses = (int)Convert.ToUInt32(arg.Replace("-Xoptimize:", ""));
 					} catch{
 						Console.Error.WriteLine("SORRY, IKVM.NET experimental optimizations disabled, reason: negative or invalid number of optimization passes.");
+					}
+				}
+				else if(arg.StartsWith("-Xfilecache:")){
+					try{
+						Helper.FileIOCacheSize = (int)Convert.ToUInt32(arg.Replace("-Xfilecache:", ""));
+					} catch{
+						Console.Error.WriteLine("SORRY, IKVM.NET file caching disabled, reason: invalid or negative cache size.");
 					}
 				}
 				else if(arg == "-Xextremeoptimize")
@@ -306,16 +313,11 @@ public static class Starter
 				{
 					Helper.enableJITPreOptimization = true;
 				}
-				else if(arg == "-XSDAM")
+				else
 				{
-					Helper.UseSingleDynamicAssembly = true;
-					Helper.FirstDynamicAssemblyName = "IKVM.Runtime.JIT";
+					Console.Error.WriteLine("{0}: illegal argument", arg);
+					break;
 				}
-                else
-                {
-                    Console.Error.WriteLine("{0}: illegal argument", arg);
-                    break;
-                }
 			}
 			else
 			{
@@ -336,26 +338,26 @@ public static class Starter
 		}
 		try
 		{
-            if (debug)
-            {
-                // Starting the debugger
-                Assembly asm = Assembly.GetExecutingAssembly();
-                String arguments = debugArg + " -pid:" + System.Diagnostics.Process.GetCurrentProcess().Id;
-                String program = new FileInfo(asm.Location).DirectoryName + "\\debugger.exe";
-                try
-                {
-                    ProcessStartInfo info = new ProcessStartInfo(program, arguments);
-                    info.UseShellExecute = false;
-                    Process debugger = new Process();
-                    debugger.StartInfo = info;
-                    debugger.Start();
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine(program + " " + arguments);
-                    throw ex;
-                }
-            }
+			if (debug)
+			{
+				// Starting the debugger
+				Assembly asm = Assembly.GetExecutingAssembly();
+				String arguments = debugArg + " -pid:" + System.Diagnostics.Process.GetCurrentProcess().Id;
+				String program = new FileInfo(asm.Location).DirectoryName + "\\debugger.exe";
+				try
+				{
+					ProcessStartInfo info = new ProcessStartInfo(program, arguments);
+					info.UseShellExecute = false;
+					Process debugger = new Process();
+					debugger.StartInfo = info;
+					debugger.Start();
+				}
+				catch (Exception ex)
+				{
+					Console.Error.WriteLine(program + " " + arguments);
+					throw ex;
+				}
+			}
 			if(jar)
 			{
 				props["java.class.path"] = mainClass;
@@ -460,10 +462,11 @@ public static class Starter
 		Console.Error.WriteLine("    -Xoptimize:n      Enable IKVM.NET experimental optimizations and use N passes of optimization");
 		Console.Error.WriteLine("    -Xextremeoptimize Enable extreme usage of IKVM.NET experimental optimizations");
 		Console.Error.WriteLine("    -Xpreoptimize     Enable precompilation optimizations");
+		Console.Error.WriteLine("    -Xfilecache:size  Set file cache size in bytes (zero to disable)");
+		Console.Error.WriteLine("                      NOTE: This is cache size per file, not global cache size!");
 		Console.Error.WriteLine("    -XuseLegacyConstantPool");
 		Console.Error.WriteLine("                      Use the legacy constant pool instead of the global constant pool");
 		Console.Error.WriteLine("                      NOTE: This increases performance, but may cause some applications to misbehave!");
-		Console.Error.WriteLine("    -XSDAM            Use Single Dynamic Assembly (low-security) Mode");
 		Console.Error.WriteLine();
 		Console.Error.WriteLine("The -X options are non-standard and subject to change without notice.");
 		Console.Error.WriteLine();

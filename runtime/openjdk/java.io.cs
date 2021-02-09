@@ -35,6 +35,7 @@ using System.Security;
 using System.Security.AccessControl;
 using Microsoft.Win32.SafeHandles;
 using IKVM.Internal;
+using jessielesbian.IKVM;
 
 public static class Java_java_io_Console
 {
@@ -127,19 +128,24 @@ public static class Java_java_io_FileDescriptor
 	{
 		if (VirtualFileSystem.IsVirtualFS(name))
 		{
-			return VirtualFileSystem.Open(name, fileMode, fileAccess);
+			return considerCache(VirtualFileSystem.Open(name, fileMode, fileAccess));
 		}
 		else if (fileMode == FileMode.Append)
 		{
 			// this is the way to get atomic append behavior for all writes
-			return new FileStream(name, fileMode, FileSystemRights.AppendData, FileShare.ReadWrite, 1, FileOptions.None);
+			return considerCache(new FileStream(name, fileMode, FileSystemRights.AppendData, FileShare.ReadWrite, 1, FileOptions.None));
 		}
 		else
 		{
-			return new FileStream(name, fileMode, fileAccess, FileShare.ReadWrite, 1, false);
+			return considerCache(new FileStream(name, fileMode, fileAccess, FileShare.ReadWrite, 1, false));
 		}
 	}
-
+	public static Stream considerCache(Stream str){
+		if(Helper.FileIOCacheSize > 0){
+			str = new BufferedStream(str, Helper.FileIOCacheSize);
+		}
+		return str;
+	}
 	[SecuritySafeCritical]
 	public static bool flushPosix(FileStream fs)
 	{
@@ -220,8 +226,24 @@ public static class Java_java_io_FileInputStream
 		return fd.skip(n);
 #endif
 	}
+	public static long skip0(object _this, long n, [In] java.io.FileDescriptor fd)
+	{
+#if FIRST_PASS
+		return 0;
+#else
+		return fd.skip(n);
+#endif
+	}
 
 	public static int available(object _this, [In] java.io.FileDescriptor fd)
+	{
+#if FIRST_PASS
+		return 0;
+#else
+		return fd.available();
+#endif
+	}
+	public static int available0(object _this, [In] java.io.FileDescriptor fd)
 	{
 #if FIRST_PASS
 		return 0;

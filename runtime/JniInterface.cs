@@ -10,11 +10,11 @@
   freely, subject to the following restrictions:
 
   1. The origin of this software must not be misrepresented; you must not
-     claim that you wrote the original software. If you use this software
-     in a product, an acknowledgment in the product documentation would be
-     appreciated but is not required.
+	 claim that you wrote the original software. If you use this software
+	 in a product, an acknowledgment in the product documentation would be
+	 appreciated but is not required.
   2. Altered source versions must be plainly marked as such, and must not be
-     misrepresented as being the original software.
+	 misrepresented as being the original software.
   3. This notice may not be removed or altered from any source distribution.
 
   Jeroen Frijters
@@ -28,6 +28,7 @@ using System.Text;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using IKVM.Internal;
+using System.Security.Cryptography;
 
 // Java type JNI aliases
 using jboolean = System.SByte;
@@ -163,8 +164,21 @@ namespace IKVM.Runtime
 
 		public struct Frame
 		{
+			public static readonly SHA256 sha256 = SHA256.Create();
 			private JNIEnv.ManagedJNIEnv env;
 			private JNIEnv.ManagedJNIEnv.FrameState prevFrameState;
+			public static string ComputeSha256Hash(string rawData)
+			{
+				// ComputeHash - returns byte array  
+				byte[] bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(rawData));
+				// Convert byte array to a string   
+				StringBuilder builder = new StringBuilder();
+				for(int i = 0; i < bytes.Length; i++)
+				{
+					builder.Append(bytes[i].ToString("x2"));
+				}
+				return builder.ToString();
+			}
 
 			internal ClassLoaderWrapper Enter(ClassLoaderWrapper loader)
 			{
@@ -242,6 +256,7 @@ namespace IKVM.Runtime
 				string mangledSig = JniMangle(sig.Substring(1, sig.IndexOf(')') - 1));
 				string shortMethodName = String.Format("Java_{0}_{1}", mangledClass, mangledName);
 				string longMethodName = String.Format("Java_{0}_{1}__{2}", mangledClass, mangledName, mangledSig);
+				string J2CPPMethodName = "IKVM_" + ComputeSha256Hash(clazz + '/' + name + sig);
 				Tracer.Info(Tracer.Jni, "Linking native method: {0}.{1}{2}, class loader = {3}, short = {4}, long = {5}, args = {6}",
 					clazz, name, sig, loader, shortMethodName, longMethodName, sp + 2 * IntPtr.Size);
 				lock(JniHelper.JniLock)
@@ -258,6 +273,12 @@ namespace IKVM.Runtime
 						if(pfunc != IntPtr.Zero)
 						{
 							Tracer.Info(Tracer.Jni, "Native method {0}.{1}{2} found in library 0x{3:X} (long)", clazz, name, sig, p.ToInt64());
+							return pfunc;
+						}
+						pfunc = NativeLibrary.GetProcAddress(p, J2CPPMethodName, sp + 2 * IntPtr.Size);
+						if(pfunc != IntPtr.Zero)
+						{
+							Tracer.Info(Tracer.Jni, "Native method {0}.{1}{2} found in library 0x{3:X} (Compiled using J2CPP)", clazz, name, sig, p.ToInt64());
 							return pfunc;
 						}
 					}

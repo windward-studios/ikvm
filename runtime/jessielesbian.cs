@@ -1,10 +1,12 @@
 ﻿using System;
-using IKVM.Internal;
+using IKVM.Attributes;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Security;
+using System.IO;
 using Instruction = IKVM.Internal.ClassFile.Method.Instruction;
+using System.Collections.Concurrent;
 
 //Do you believe in high-quality code by Female/LGBT programmers? Leave u/jessielesbian a PM on Reddit!
 
@@ -35,15 +37,15 @@ namespace jessielesbian.IKVM
 	{
 
 	}
-	public static class Helper
+	[HideFromJava] public static class Helper
 	{
 		static Helper()
 		{
 			Array array = new object[0];
 			ArrayLoad = new Func<int, object>(array.GetValue).Method;
 			ArrayStore = new Action<object, int>(array.SetValue).Method;
-			GlobalConstantPoolIndexer = new Dictionary<string, int>();
-			GlobalConstantPool = new Dictionary<SelfHashingInteger, object>();
+			GlobalConstantPoolIndexer = new ConcurrentDictionary<string, int>();
+			GlobalConstantPool = new ConcurrentDictionary<SelfHashingInteger, object>();
 			Type[] TypeArray = new Type[1];
 			TypeArray[0] = typeof(int);
 			GetGlobalConstantPoolItemReflected = typeof(Helper).GetMethod("GetGlobalConstantPoolItem", TypeArray);
@@ -52,6 +54,7 @@ namespace jessielesbian.IKVM
 			TypeArray[1] = typeof(object);
 			ObjectCheckRefEqual = typeof(object).GetMethod("ReferenceEquals", TypeArray);
 		}
+		public static int FileIOCacheSize = 65536;
 		public static object IKVMSYNC = new object();
 		public static string FirstDynamicAssemblyName = "";
 		public static AssemblyBuilder FirstDynamicAssembly = null;
@@ -59,9 +62,9 @@ namespace jessielesbian.IKVM
 		public static bool DisableGlobalConstantPool = false;
 		public static readonly MethodInfo GetGlobalConstantPoolItemReflected;
 		public static readonly MethodInfo ObjectCheckRefEqual;
-		public static volatile int GlobalConstantPoolCounter = 0;
-		public static Dictionary<string, int> GlobalConstantPoolIndexer;
-		public static Dictionary<SelfHashingInteger, object> GlobalConstantPool;
+		public static int GlobalConstantPoolCounter = 0;
+		public static ConcurrentDictionary<string, int> GlobalConstantPoolIndexer;
+		public static ConcurrentDictionary<SelfHashingInteger, object> GlobalConstantPool;
 		public static bool TraceMeths = false;
 		public static object GetGlobalConstantPoolItem(int index){
 			object result;

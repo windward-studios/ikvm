@@ -10,11 +10,11 @@
   freely, subject to the following restrictions:
 
   1. The origin of this software must not be misrepresented; you must not
-     claim that you wrote the original software. If you use this software
-     in a product, an acknowledgment in the product documentation would be
-     appreciated but is not required.
+	 claim that you wrote the original software. If you use this software
+	 in a product, an acknowledgment in the product documentation would be
+	 appreciated but is not required.
   2. Altered source versions must be plainly marked as such, and must not be
-     misrepresented as being the original software.
+	 misrepresented as being the original software.
   3. This notice may not be removed or altered from any source distribution.
 
   Jeroen Frijters
@@ -36,6 +36,7 @@ using System.Diagnostics.SymbolStore;
 using IKVM.Attributes;
 using IKVM.Internal;
 using jessielesbian.IKVM;
+using System.Threading;
 
 using ExceptionTableEntry = IKVM.Internal.ClassFile.Method.ExceptionTableEntry;
 using LocalVariableTableEntry = IKVM.Internal.ClassFile.Method.LocalVariableTableEntry;
@@ -2870,23 +2871,14 @@ sealed class Compiler
 		}
 
 	}
+	private static int GetGlobalConstantPoolIndexerAtomic(string index){
+		return Interlocked.Increment(ref Helper.GlobalConstantPoolCounter);
+	}
 	private void EmitGlobalConstantPoolAccess(CodeEmitter ilgen, int constant, object obj){
 		#if !STATIC_COMPILER
 		string index = classFile.Name + "@" + constant.ToString();
-		int GlobalConstantIndex = 0;
-		bool usedOldGlobalConstantPoolItem = false;
-		lock(Helper.GlobalConstantPoolIndexer){
-			usedOldGlobalConstantPoolItem = Helper.GlobalConstantPoolIndexer.TryGetValue(index, out GlobalConstantIndex);
-			if(!usedOldGlobalConstantPoolItem){
-				GlobalConstantIndex = Helper.GlobalConstantPoolCounter++;
-				Helper.GlobalConstantPoolIndexer.Add(index, GlobalConstantIndex);
-			}
-		}
-		if(!usedOldGlobalConstantPoolItem){
-			lock(Helper.GlobalConstantPool){
-				Helper.GlobalConstantPool.Add(new SelfHashingInteger(GlobalConstantIndex), obj);
-			}
-		}
+		int GlobalConstantIndex = Helper.GlobalConstantPoolIndexer.GetOrAdd(index, GetGlobalConstantPoolIndexerAtomic);
+		Helper.GlobalConstantPool.TryAdd(new SelfHashingInteger(GlobalConstantIndex), obj);
 		ilgen.EmitLdc_I4(GlobalConstantIndex);
 		ilGenerator.Emit(OpCodes.Call, Helper.GetGlobalConstantPoolItemReflected);
 		#endif

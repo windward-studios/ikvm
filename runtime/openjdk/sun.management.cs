@@ -156,7 +156,7 @@ public static class Java_sun_management_OperatingSystemImpl
 
 	public static long getTotalPhysicalMemorySize(object _this)
 	{
-	    return getComputerInfo("TotalPhysicalMemory");
+		return getComputerInfo("TotalPhysicalMemory");
 	}
 
 	public static double getSystemCpuLoad(object _this)

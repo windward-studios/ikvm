@@ -58,27 +58,27 @@
 static partial class fdlibm
 {
 	internal static
-        double tan(double x)
+		double tan(double x)
 {
-        double z=0.0;
-        int n, ix;
+		double z=0.0;
+		int n, ix;
 
-    /* High word of x. */
-        ix = __HI(x);
+	/* High word of x. */
+		ix = __HI(x);
 
-    /* |x| ~< pi/4 */
-        ix &= 0x7fffffff;
-        if(ix <= 0x3fe921fb) return __kernel_tan(x,z,1);
+	/* |x| ~< pi/4 */
+		ix &= 0x7fffffff;
+		if(ix <= 0x3fe921fb) return __kernel_tan(x,z,1);
 
-    /* tan(Inf or NaN) is NaN */
-        else if (ix>=0x7ff00000) return x-x;            /* NaN */
+	/* tan(Inf or NaN) is NaN */
+		else if (ix>=0x7ff00000) return x-x;            /* NaN */
 
-    /* argument reduction needed */
-        else {
+	/* argument reduction needed */
+		else {
 			double y_0_ = 0.0, y_1_ = 0.0;
 			n = __ieee754_rem_pio2(x, ref y_0_, ref y_1_);
-            return __kernel_tan(y_0_,y_1_,1-((n&1)<<1)); /*   1 -- n even
-                                                        -1 -- n odd */
-        }
-    }
+			return __kernel_tan(y_0_,y_1_,1-((n&1)<<1)); /*   1 -- n even
+														-1 -- n odd */
+		}
+	}
 }
