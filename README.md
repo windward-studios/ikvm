@@ -34,12 +34,20 @@
  + precompilation optimizations
  + NEW IKVMC options: -optimize:n, -preoptimize and -extremeoptimize
  + NEW IKVM options: -Xoptimize:n, -Xpreoptimize and -Xextremeoptimize
+ + Added file caching
+ + Converted quardspaces to indentations
+ + Upgraded to IKVMClass v1.0.1 from OpenJDK 8u45
 
 ## List of changes Jessie Lesbian want to make
 
  + MORE OPTIMIZATIONS!
  + Fully support Swing and AWT
  + Play Minecraft with this IKVM.NET fork
+ 
+## What I done well
+
+ + There are some closed-source versions with whole-program optimization
+ + Highest compartiable Minecraft version: client - 1.11.2, server - 1.12.2
 
 ## Build
 
