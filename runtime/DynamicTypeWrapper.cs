@@ -1073,9 +1073,7 @@ namespace IKVM.Internal
 				// FXBUG on .NET 2.0 RTM x64 the JIT sometimes throws an InvalidProgramException while trying to inline this method,
 				// so we prevent inlining for now (it also turns out that on x86 not inlining this method actually has a positive perf impact in some cases...)
 				// http://connect.microsoft.com/VisualStudio/feedback/ViewFeedback.aspx?FeedbackID=285772
-				#if !NET_4_0
 				clinitMethod.SetImplementationFlags(clinitMethod.GetMethodImplementationFlags() | MethodImplAttributes.NoInlining);
-				#endif
 			}
 
 			private sealed class DelegateConstructorMethodWrapper : MethodWrapper
@@ -1700,9 +1698,17 @@ namespace IKVM.Internal
 					ilgen.Emit(OpCodes.Call, clinitMethod);
 				}
 			}
+						
+			private DynamicImpl FinishedDynamicImpl;
 
 			internal override DynamicImpl Finish()
 			{
+				//Optimization: prevent repeated type finishing
+				lock (this){
+					if(FinishedDynamicImpl != null){
+						return FinishedDynamicImpl;
+					}
+				}
 				TypeWrapper baseTypeWrapper = wrapper.BaseTypeWrapper;
 				if (baseTypeWrapper != null)
 				{
@@ -1760,6 +1766,9 @@ namespace IKVM.Internal
 					finally
 					{
 						impl = FinishCore();
+					}
+					lock (this){
+						FinishedDynamicImpl = impl;
 					}
 					return impl;
 				}
@@ -4320,7 +4329,7 @@ namespace IKVM.Internal
 					{
 						hasConstructor = true;
 						CodeEmitter ilGenerator = CodeEmitter.Create(mb);
-						CompileConstructorBody(this, ilGenerator, i);
+						CompileConstructorBody(this, ilGenerator, i, mb);
 					}
 					else
 					{
@@ -4564,7 +4573,7 @@ namespace IKVM.Internal
 							Compiler.Compile(this, host, wrapper, methods[i], classFile, m, ilGenerator, ref nonleaf);
 							ilGenerator.CheckLabels();
 							ilGenerator.DoEmit();
-							if (nonleaf && !m.IsForceInline)
+							if (nonleaf)
 							{
 								mb.SetImplementationFlags(mb.GetMethodImplementationFlags() | MethodImplAttributes.NoInlining);
 							}
@@ -4608,7 +4617,7 @@ namespace IKVM.Internal
 					}
 					if (clinitIndex != -1)
 					{
-						CompileConstructorBody(this, ilGenerator, clinitIndex);
+						CompileConstructorBody(this, ilGenerator, clinitIndex, cb);
 					}
 					else
 					{
@@ -6302,7 +6311,7 @@ namespace IKVM.Internal
 				}
 			}
 
-			private void CompileConstructorBody(FinishContext context, CodeEmitter ilGenerator, int methodIndex)
+			private void CompileConstructorBody(FinishContext context, CodeEmitter ilGenerator, int methodIndex, MethodBuilder mb)
 			{
 				MethodWrapper[] methods = wrapper.GetMethods();
 				ClassFile.Method m = classFile.Methods[methodIndex];
@@ -6317,6 +6326,10 @@ namespace IKVM.Internal
 #endif
 				bool nonLeaf = false;
 				Compiler.Compile(context, host, wrapper, methods[methodIndex], classFile, m, ilGenerator, ref nonLeaf);
+				if (nonLeaf)
+				{
+					mb.SetImplementationFlags(mb.GetMethodImplementationFlags() | MethodImplAttributes.NoInlining);
+				}
 				ilGenerator.DoEmit();
 #if STATIC_COMPILER
 				ilGenerator.EmitLineNumberTable((MethodBuilder)methods[methodIndex].GetMethod());

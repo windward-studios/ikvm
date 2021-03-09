@@ -7,6 +7,7 @@ using System.Security;
 using System.IO;
 using Instruction = IKVM.Internal.ClassFile.Method.Instruction;
 using System.Collections.Concurrent;
+using System.Threading;
 
 //Do you believe in high-quality code by Female/LGBT programmers? Leave u/jessielesbian a PM on Reddit!
 
@@ -37,7 +38,32 @@ namespace jessielesbian.IKVM
 	{
 
 	}
-	[HideFromJava] public static class Helper
+	//Idea from stack overflow user blueraja-danny-pflughoeft
+	public static class ThreadSafeRandom
+	{
+		private static readonly Random _global = new Random();
+		[ThreadStatic] private static Random _local;
+
+		public static int Next()
+		{
+			if (_local == null)
+			{
+				lock (_global)
+				{
+					if (_local == null)
+					{
+						int seed = _global.Next();
+						_local = new Random(seed);
+					}
+				}
+			}
+			return _local.Next();
+		}
+	}
+	#if !FIRST_PASS
+	[HideFromJava]
+	#endif
+	public static class Helper
 	{
 		static Helper()
 		{
@@ -53,6 +79,19 @@ namespace jessielesbian.IKVM
 			TypeArray[0] = typeof(object);
 			TypeArray[1] = typeof(object);
 			ObjectCheckRefEqual = typeof(object).GetMethod("ReferenceEquals", TypeArray);
+		}
+		public static volatile bool StillInMinecraftMode = true;
+		public static void MinecraftModeGCLoop(){
+			while(StillInMinecraftMode){
+				Thread.Sleep(1500);
+				GC.Collect();
+			}
+		}
+		public static void EnterMinecraftMode(){
+			new Thread(new ThreadStart(MinecraftModeGCLoop)).Start();
+		}
+		public static void ExitMinecraftMode(){
+			StillInMinecraftMode = false;
 		}
 		public static int FileIOCacheSize = 65536;
 		public static object IKVMSYNC = new object();

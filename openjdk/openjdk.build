@@ -41,36 +41,12 @@
     </target>
     
     <target name="vfs">
-        <!-- This file is generated here, but it is added as a resource to IKVM.Runtime.dll, because Ref.Emit on .NET 1.1 doesn't support adding a raw resource. -->
-        <zip zipfile="vfs.zip">
-            <fileset basedir="${OpenJDK.dir}/build/linux-x86_64-normal-server-release/jdk">
-                <include name="lib/calendars.properties" />
-                <include name="lib/logging.properties" />
-                <include name="lib/management/management.properties" />
-                <include name="lib/net.properties" />
-                <include name="lib/psfontj2d.properties" />
-                <include name="lib/sound.properties" />
-                <include name="lib/cmm/*" />
-                <include name="lib/tzdb.dat" />
-                <include name="lib/currency.data" />
-                <include name="lib/security/java.policy" />
-                <include name="lib/security/java.security" />
-                <!--
-                we don't add lib/security/local_policy.jar, because it is the restricted version,
-                instead we'll add a link in vfs from local_policy.jar to US_export_policy.jar
-                (because US_export_policy.jar is unrestricted)
-                -->
-                <include name="lib/security/US_export_policy.jar" />
-            </fileset>
-            <fileset basedir="${OpenJDK.dir}/jdk/src/windows">
-                <include name="lib/flavormap.properties" />
-                <include name="lib/content-types.properties" />
-            </fileset>
-            </zip>
-        </target>
+        <!-- VFS had been moved to runtime.build! -->
+    </target>
 
     <target name="resources">
         <!-- collect the resources in a zip to make it easier to include them in the right assemblies -->
+        <!--
         <zip zipfile="resources.zip">
             <fileset basedir="${OpenJDK.dir}/build/linux-x86_64-normal-server-release/jdk/classes">
                 <include name="com/sun/corba/se/impl/orbutil/resources/*.properties" />
@@ -108,6 +84,7 @@
                 <include name="**/*.xml" />
             </fileset>
         </zip>
+        -->
     </target>
 
     <target name="MANIFEST.MF">
@@ -155,8 +132,9 @@
             <arg value="-nowarn:110" />
             <arg value="-w4" />
             <arg value="-warnaserror" />
+            <!-- WARNING: REMOVE BEFORE STABLE RELEASE -->
+            <arg value="-nojni" />
             <!-- we need optimizations since Jessie Lesbian had waiting difficulties. -->
-            <arg value="-optimize:5" />
             <arg value="-extremeoptimize" />
             <arg value="-preoptimize" />
             <arg value="-removeassertions" />

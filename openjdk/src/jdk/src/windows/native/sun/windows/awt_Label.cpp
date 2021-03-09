@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -80,7 +80,7 @@ AwtLabel* AwtLabel::Create(jobject labelPeer, jobject parent)
 
         JNI_CHECK_PEER_GOTO(parent, done);
         awtParent = (AwtCanvas*)pData;
-        JNI_CHECK_NULL_GOTO(awtParent, "awtParent", done);
+
         target  = env->GetObjectField(labelPeer, AwtObject::targetID);
         JNI_CHECK_NULL_GOTO(target, "target", done);
 
@@ -146,14 +146,15 @@ void AwtLabel::DoPaint(HDC hDC, RECT& r)
 
         jint alignment = env->GetIntField(target, AwtLabel::alignmentID);
         switch (alignment) {
-           case java_awt_Label_LEFT:
-              x = r.left + 2;
-              break;
           case java_awt_Label_CENTER:
               x = (r.left + r.right - size.cx) / 2;
               break;
           case java_awt_Label_RIGHT:
               x = r.right - 2 - size.cx;
+              break;
+          case java_awt_Label_LEFT:
+          default:
+              x = r.left + 2;
               break;
         }
         /* draw string */
@@ -391,12 +392,9 @@ Java_sun_awt_windows_WLabelPeer_create(JNIEnv *env, jobject self,
 {
     TRY;
 
-    PDATA pData;
-    JNI_CHECK_PEER_RETURN(parent);
     AwtToolkit::CreateComponent(self, parent,
                                 (AwtToolkit::ComponentFactory)
                                 AwtLabel::Create);
-    JNI_CHECK_PEER_CREATION_RETURN(self);
 
     CATCH_BAD_ALLOC;
 }

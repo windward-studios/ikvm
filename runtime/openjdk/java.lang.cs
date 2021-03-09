@@ -39,7 +39,7 @@ public static class Java_java_lang_Class
 #if FIRST_PASS
 		return null;
 #else
-		//Console.WriteLine("forName: " + name + ", loader = " + loader);
+		//Console.WriteLine("forName: " + name);
 		TypeWrapper tw = null;
 		if (name.IndexOf(',') > 0)
 		{
@@ -243,6 +243,11 @@ public static class Java_java_lang_Class
 
 	public static java.lang.ClassLoader getClassLoader0(java.lang.Class thisClass)
 	{
+#if !FIRST_PASS
+		if(thisClass.actualClassLoader != null){
+			return thisClass.actualClassLoader;
+		}
+#endif
 		return TypeWrapper.FromClass(thisClass).GetClassLoader().GetJavaClassLoader();
 	}
 
@@ -694,7 +699,16 @@ public static class Java_java_lang_ClassLoader
 #endif
 				}
 				TypeWrapper type = classLoaderWrapper.DefineClass(classFile, pd);
-				return type.ClassObject;
+				java.lang.Class clazz = type.ClassObject;
+#if !FIRST_PASS
+				//IKVM.NET Enhanced Dynamic Class Loading
+				if(clazz != null && thisClassLoader != null){
+					thisClassLoader.loadedClassesMap.putIfAbsent(name, clazz);
+					clazz.actualClassLoader = thisClassLoader;
+					thisClassLoader.addClass(clazz);
+				}
+#endif
+				return clazz;
 			}
 			catch (RetargetableJavaException x)
 			{
@@ -743,13 +757,32 @@ public static class Java_java_lang_ClassLoader
 
 	public static java.lang.Class findLoadedClass0(java.lang.ClassLoader thisClassLoader, string name)
 	{
+		#if FIRST_PASS
+		return null;
+		#else
 		if (name == null)
 		{
 			return null;
 		}
-		ClassLoaderWrapper loader = ClassLoaderWrapper.GetClassLoaderWrapper(thisClassLoader);
-		TypeWrapper tw = loader.FindLoadedClass(name);
-		return tw != null ? tw.ClassObject : null;
+		if(thisClassLoader == null){
+			ClassLoaderWrapper loader = ClassLoaderWrapper.GetClassLoaderWrapper(thisClassLoader);
+			TypeWrapper tw = loader.FindLoadedClass(name);
+			return tw != null ? tw.ClassObject : null;
+		}
+		Object temp = thisClassLoader.loadedClassesMap.get(name);
+		if(temp == null){
+			ClassLoaderWrapper loader = ClassLoaderWrapper.GetClassLoaderWrapper(thisClassLoader);
+			TypeWrapper tw = loader.FindLoadedClass(name);
+			java.lang.Class tmp = (tw != null ? tw.ClassObject : null);
+			if(tmp != null){
+				thisClassLoader.loadedClassesMap.putIfAbsent(name, tmp);
+			}
+			return tmp;
+		}
+		else{
+			return (java.lang.Class)temp;
+		}
+		#endif
 	}
 
 	public static object retrieveDirectives()

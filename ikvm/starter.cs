@@ -114,6 +114,7 @@ public static class Starter
 		bool debug = false;
 		String debugArg = null;
 		bool noglobbing = false;
+		bool minecraft = false;
 		for(int i = 0; i < args.Length; i++)
 		{
 			String arg = args[i];
@@ -313,6 +314,10 @@ public static class Starter
 				{
 					Helper.enableJITPreOptimization = true;
 				}
+				else if(arg == "-Xminecraft")
+				{
+					minecraft = true;
+				}
 				else
 				{
 					Console.Error.WriteLine("{0}: illegal argument", arg);
@@ -393,6 +398,9 @@ public static class Starter
 				{
 					java.lang.Runtime.getRuntime().addShutdownHook(new WaitShutdownHook());
 				}
+				if(minecraft){
+					MinecraftCompatMode.Enable();
+				}
 				try
 				{
 					method.invoke(null, new object[] { vmargs });
@@ -463,10 +471,12 @@ public static class Starter
 		Console.Error.WriteLine("    -Xextremeoptimize Enable extreme usage of IKVM.NET experimental optimizations");
 		Console.Error.WriteLine("    -Xpreoptimize     Enable precompilation optimizations");
 		Console.Error.WriteLine("    -Xfilecache:size  Set file cache size in bytes (zero to disable)");
-		Console.Error.WriteLine("                      NOTE: This is cache size per file, not global cache size!");
+		Console.Error.WriteLine("                      NOTE: This is cache size per FileInputStream/FileOutputStream, not global cache size!");
 		Console.Error.WriteLine("    -XuseLegacyConstantPool");
 		Console.Error.WriteLine("                      Use the legacy constant pool instead of the global constant pool");
 		Console.Error.WriteLine("                      NOTE: This increases performance, but may cause some applications to misbehave!");
+		Console.Error.WriteLine("    -Xminecraft       Enable certain Java standard augmentations needed to run Minecraft 1.12 and above");
+		Console.Error.WriteLine("                      WARNING: using this option on other applications can create issues");
 		Console.Error.WriteLine();
 		Console.Error.WriteLine("The -X options are non-standard and subject to change without notice.");
 		Console.Error.WriteLine();

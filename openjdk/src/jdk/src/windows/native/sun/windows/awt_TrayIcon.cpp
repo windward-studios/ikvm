@@ -93,6 +93,12 @@ AwtTrayIcon::~AwtTrayIcon() {
 
 void AwtTrayIcon::Dispose() {
     SendTrayMessage(NIM_DELETE);
+
+    // Destroy the icon to avoid leak of GDI objects
+    if (m_nid.hIcon != NULL) {
+        ::DestroyIcon(m_nid.hIcon);
+    }
+
     UnlinkObjects();
 
     if (--sm_instCount == 0) {
@@ -709,7 +715,7 @@ void AwtTrayIcon::SetToolTip(LPCTSTR tooltip)
 {
     if (tooltip == NULL) {
         m_nid.szTip[0] = '\0';
-    } else if (lstrlen(tooltip) > TRAY_ICON_TOOLTIP_MAX_SIZE) {
+    } else if (lstrlen(tooltip) >= TRAY_ICON_TOOLTIP_MAX_SIZE) {
         _tcsncpy(m_nid.szTip, tooltip, TRAY_ICON_TOOLTIP_MAX_SIZE);
         m_nid.szTip[TRAY_ICON_TOOLTIP_MAX_SIZE - 1] = '\0';
     } else {
@@ -814,7 +820,7 @@ void AwtTrayIcon::DisplayMessage(LPCTSTR caption, LPCTSTR text, LPCTSTR msgType)
     if (caption[0] == '\0') {
         m_nid.szInfoTitle[0] = '\0';
 
-    } else if (lstrlen(caption) > TRAY_ICON_BALLOON_TITLE_MAX_SIZE) {
+    } else if (lstrlen(caption) >= TRAY_ICON_BALLOON_TITLE_MAX_SIZE) {
 
         _tcsncpy(m_nid.szInfoTitle, caption, TRAY_ICON_BALLOON_TITLE_MAX_SIZE);
         m_nid.szInfoTitle[TRAY_ICON_BALLOON_TITLE_MAX_SIZE - 1] = '\0';
@@ -827,7 +833,7 @@ void AwtTrayIcon::DisplayMessage(LPCTSTR caption, LPCTSTR text, LPCTSTR msgType)
         m_nid.szInfo[0] = ' ';
         m_nid.szInfo[1] = '\0';
 
-    } else if (lstrlen(text) > TRAY_ICON_BALLOON_INFO_MAX_SIZE) {
+    } else if (lstrlen(text) >= TRAY_ICON_BALLOON_INFO_MAX_SIZE) {
 
         _tcsncpy(m_nid.szInfo, text, TRAY_ICON_BALLOON_INFO_MAX_SIZE);
         m_nid.szInfo[TRAY_ICON_BALLOON_INFO_MAX_SIZE - 1] = '\0';

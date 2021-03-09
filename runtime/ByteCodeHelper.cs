@@ -29,6 +29,7 @@ using IKVM.Attributes;
 using IKVM.Internal;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Collections;
 
 namespace IKVM.Runtime
 {
@@ -94,6 +95,23 @@ namespace IKVM.Runtime
 
 	public static class ByteCodeHelper
 	{
+		private static LinkedList<string> initedClasses = new LinkedList<string>();
+		public static bool isAlreadyInited(string className){
+			LinkedList<string> copy;
+			lock(initedClasses){
+				copy = new LinkedList<string>(initedClasses);
+				initedClasses.AddFirst(className);
+			}
+			return copy.Contains(className);
+		}
+		public static bool isNonLeafInit(string className){
+			LinkedList<string> copy;
+			lock(initedClasses){
+				copy = new LinkedList<string>(initedClasses);
+			}
+			return copy.Contains(className);
+		}
+		
 		[DebuggerStepThroughAttribute]
 		public static object multianewarray(RuntimeTypeHandle typeHandle, int[] lengths)
 		{

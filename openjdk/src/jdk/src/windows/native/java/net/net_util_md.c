@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,9 @@
 
 #include "net_util.h"
 #include "jni.h"
+
+// Taken from mstcpip.h in Windows SDK 8.0 or newer.
+#define SIO_LOOPBACK_FAST_PATH              _WSAIOW(IOC_VENDOR,16)
 
 #ifndef IPTOS_TOS_MASK
 #define IPTOS_TOS_MASK 0x1e
@@ -215,9 +218,7 @@ NET_ThrowSocketException(JNIEnv *env, char* msg)
 void
 NET_ThrowByNameWithLastError(JNIEnv *env, const char *name,
                    const char *defaultDetail) {
-    char errmsg[255];
-    sprintf(errmsg, "errno: %d, error: %s\n", WSAGetLastError(), defaultDetail);
-    JNU_ThrowByNameWithLastError(env, name, errmsg);
+    JNU_ThrowByNameWithMessageAndLastError(env, name, defaultDetail);
 }
 
 jfieldID
@@ -386,8 +387,8 @@ JNIEXPORT int JNICALL
 NET_SetSockOpt(int s, int level, int optname, const void *optval,
                int optlen)
 {
-    int rv;
-    int parg;
+    int rv = 0;
+    int parg = 0;
     int plen = sizeof(parg);
 
     if (level == IPPROTO_IP && optname == IP_TOS) {
@@ -478,7 +479,7 @@ NET_GetSockOpt(int s, int level, int optname, void *optval,
  * Sets SO_ECLUSIVEADDRUSE if SO_REUSEADDR is not already set.
  */
 void setExclusiveBind(int fd) {
-    int parg;
+    int parg = 0;
     int plen = sizeof(parg);
     int rv = 0;
     rv = NET_GetSockOpt(fd, SOL_SOCKET, SO_REUSEADDR, (char *)&parg, &plen);
@@ -499,7 +500,7 @@ void setExclusiveBind(int fd) {
 JNIEXPORT int JNICALL
 NET_Bind(int s, struct sockaddr *him, int len)
 {
-    int rv;
+    int rv = 0;
     rv = bind(s, him, len);
 
     if (rv == SOCKET_ERROR) {
@@ -529,8 +530,8 @@ NET_WinBind(int s, struct sockaddr *him, int len, jboolean exclBind)
 
 JNIEXPORT int JNICALL
 NET_SocketClose(int fd) {
-    struct linger l;
-    int ret;
+    struct linger l = {0, 0};
+    int ret = 0;
     int len = sizeof (l);
     if (getsockopt(fd, SOL_SOCKET, SO_LINGER, (char *)&l, &len) == 0) {
         if (l.l_onoff == 0) {
@@ -844,6 +845,25 @@ jint getDefaultIPv6Interface(JNIEnv *env, struct SOCKADDR_IN6 *target_addr)
     }
 }
 
+/**
+ * Enables SIO_LOOPBACK_FAST_PATH
+ */
+JNIEXPORT jint JNICALL
+NET_EnableFastTcpLoopback(int fd) {
+    int enabled = 1;
+    DWORD result_byte_count = -1;
+    int result = WSAIoctl(fd,
+                          SIO_LOOPBACK_FAST_PATH,
+                          &enabled,
+                          sizeof(enabled),
+                          NULL,
+                          0,
+                          &result_byte_count,
+                          NULL,
+                          NULL);
+    return result == SOCKET_ERROR ? WSAGetLastError() : 0;
+}
+
 /* If address types is IPv6, then IPv6 must be available. Otherwise
  * no address can be generated. In the case of an IPv4 Inetaddress this
  * method will return an IPv4 mapped address where IPv6 is available and
@@ -855,6 +875,7 @@ NET_InetAddressToSockaddr(JNIEnv *env, jobject iaObj, int port, struct sockaddr 
                           int *len, jboolean v4MappedAddress) {
     jint family, iafam;
     iafam = getInetAddress_family(env, iaObj);
+    JNU_CHECK_EXCEPTION_RETURN(env, -1);
     family = (iafam == IPv4)? AF_INET : AF_INET6;
     if (ipv6_available() && !(family == AF_INET && v4MappedAddress == JNI_FALSE)) {
         struct SOCKADDR_IN6 *him6 = (struct SOCKADDR_IN6 *)him;
@@ -865,6 +886,7 @@ NET_InetAddressToSockaddr(JNIEnv *env, jobject iaObj, int port, struct sockaddr 
         if (family == AF_INET) { /* will convert to IPv4-mapped address */
             memset((char *) caddr, 0, 16);
             address = getInetAddress_addr(env, iaObj);
+            JNU_CHECK_EXCEPTION_RETURN(env, -1);
             if (address == INADDR_ANY) {
                 /* we would always prefer IPv6 wildcard address
                 caddr[10] = 0xff;
@@ -903,6 +925,7 @@ NET_InetAddressToSockaddr(JNIEnv *env, jobject iaObj, int port, struct sockaddr 
         }
         memset((char *) him4, 0, sizeof(struct sockaddr_in));
         address = getInetAddress_addr(env, iaObj);
+        JNU_CHECK_EXCEPTION_RETURN(env, -1);
         him4->sin_port = htons((short) port);
         him4->sin_addr.s_addr = (u_long) htonl(address);
         him4->sin_family = AF_INET;

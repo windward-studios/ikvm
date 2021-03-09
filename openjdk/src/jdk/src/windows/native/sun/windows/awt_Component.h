@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -67,7 +67,10 @@ const UINT MAX_ACP_STR_LEN = 7; // ANSI CP identifiers are no longer than this
 const int ALL_MK_BUTTONS = MK_LBUTTON|MK_MBUTTON|MK_RBUTTON;
 const int X_BUTTONS = MK_XBUTTON1|MK_XBUTTON2;
 
-
+// The allowable difference between coordinates of the WM_TOUCH event and the
+// corresponding WM_LBUTTONDOWN/WM_LBUTTONUP event letting to associate these
+// events, when their coordinates are slightly different.
+const int TOUCH_MOUSE_COORDS_DELTA = 10;
 
 // Whether to check for embedded frame and adjust location
 #define CHECK_EMBEDDED 0
@@ -384,7 +387,7 @@ public:
     void SendMouseEvent(jint id, jlong when, jint x, jint y,
                         jint modifiers, jint clickCount,
                         jboolean popupTrigger, jint button = 0,
-                        MSG *msg = NULL);
+                        MSG *msg = NULL, BOOL causedByTouchEvent = FALSE);
 
     /*
      * Allocate and initialize a new java.awt.event.MouseWheelEvent, and
@@ -526,6 +529,7 @@ public:
     virtual MsgRouting WmNcMouseUp(WPARAM hitTest, int x, int y, int button);
     virtual MsgRouting WmWindowPosChanging(LPARAM windowPos);
     virtual MsgRouting WmWindowPosChanged(LPARAM windowPos);
+    virtual void WmTouch(WPARAM wParam, LPARAM lParam);
 
     // NB: 64-bit: vkey is wParam of the message, but other API's take
     // vkey parameters of type UINT, so we do the cast before dispatching.
@@ -665,6 +669,7 @@ public:
     static void _RemoveNativeDropTarget(void *param);
     static jintArray _CreatePrintedPixels(void *param);
     static jboolean _NativeHandlesWheelScrolling(void *param);
+    static void _SetParent(void * param);
     static void _SetRectangularShape(void *param);
     static void _SetZOrder(void *param);
 
@@ -756,6 +761,11 @@ private:
     */
     UINT m_mouseButtonClickAllowed;
 
+    BOOL m_touchDownOccurred;
+    BOOL m_touchUpOccurred;
+    POINT m_touchDownPoint;
+    POINT m_touchUpPoint;
+
     BOOL m_bSubclassed;
     BOOL m_bPauseDestroy;
 
@@ -819,6 +829,8 @@ private:
 
     // 6524352: support finer-resolution
     int m_wheelRotationAmount;
+
+    BOOL deadKeyActive;
 
     /*
      * The association list of children's IDs and corresponding components.
@@ -900,13 +912,13 @@ public:
 
     void            AddDC(HDC hDC, HWND hWnd);
     void            AddDCItem(DCItem *newItem);
-    DCItem          *RemoveDC(HDC hDC);
+    DCItem          *RemoveDC(HDC hDC, HWND hWnd);
     DCItem          *RemoveAllDCs(HWND hWnd);
     void            RealizePalettes(int screen);
 };
 
 void ReleaseDCList(HWND hwnd, DCList &list);
-void MoveDCToPassiveList(HDC hDC);
+void MoveDCToPassiveList(HDC hDC, HWND hWnd);
 
 namespace TimeHelper{
     jlong getMessageTimeUTC();

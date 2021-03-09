@@ -117,12 +117,13 @@ Java_sun_net_spi_DefaultProxySelector_getSystemProxy(JNIEnv *env,
   char regserver[MAX_STR_LEN];
   char override[MAX_STR_LEN];
   char *s, *s2;
+  char *ctx = NULL;
   int pport = 0;
   int defport = 0;
   char *phost;
 
   /**
-   * Let's opem the Registry entry. We'll check a few values in it:
+   * Let's open the Registry entry. We'll check a few values in it:
    *
    * - ProxyEnable: 0 means no proxy, 1 means use the proxy
    * - ProxyServer: a string that can take 2 forms:
@@ -167,8 +168,13 @@ Java_sun_net_spi_DefaultProxySelector_getSystemProxy(JNIEnv *env,
            * The semicolons (;) separated entries have to be matched with the
            * the beginning of the hostname.
            */
-          s = strtok(override, "; ");
+          s = strtok_s(override, "; ", &ctx);
           urlhost = (*env)->GetStringUTFChars(env, host, &isCopy);
+          if (urlhost == NULL) {
+            if (!(*env)->ExceptionCheck(env))
+              JNU_ThrowOutOfMemoryError(env, NULL);
+            return NULL;
+          }
           while (s != NULL) {
             if (strncmp(s, urlhost, strlen(s)) == 0) {
               /**
@@ -179,15 +185,18 @@ Java_sun_net_spi_DefaultProxySelector_getSystemProxy(JNIEnv *env,
                 (*env)->ReleaseStringUTFChars(env, host, urlhost);
               goto noproxy;
             }
-            s = strtok(NULL, "; ");
+            s = strtok_s(NULL, "; ", &ctx);
           }
           if (isCopy == JNI_TRUE)
             (*env)->ReleaseStringUTFChars(env, host, urlhost);
         }
 
         cproto = (*env)->GetStringUTFChars(env, proto, &isCopy);
-        if (cproto == NULL)
-          goto noproxy;
+        if (cproto == NULL) {
+          if (!(*env)->ExceptionCheck(env))
+            JNU_ThrowOutOfMemoryError(env, NULL);
+          return NULL;
+        }
 
         /*
          * Set default port value & proxy type from protocol.
@@ -245,7 +254,9 @@ Java_sun_net_spi_DefaultProxySelector_getSystemProxy(JNIEnv *env,
           if (pport == 0)
             pport = defport;
           jhost = (*env)->NewStringUTF(env, phost);
+          CHECK_NULL_RETURN(jhost, NULL);
           isa = (*env)->CallStaticObjectMethod(env, isaddr_class, isaddr_createUnresolvedID, jhost, pport);
+          CHECK_NULL_RETURN(isa, NULL);
           proxy = (*env)->NewObject(env, proxy_class, proxy_ctrID, type_proxy, isa);
           return proxy;
         }

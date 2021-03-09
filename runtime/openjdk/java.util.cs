@@ -336,4 +336,9 @@ public static class Java_java_util_TimeZone
 		}
 	}
 }
+public static class Java_java_util_concurrent_atomic_AtomicLong{
+	public static bool VMSupportsCS8(){
+		return true;
+	}
+}
 

@@ -1984,7 +1984,7 @@ namespace IKVM.Internal
 
 	internal abstract class TypeWrapper
 	{
-		private readonly string name;		// java name (e.g. java.lang.Object)
+		internal readonly string name;		// java name (e.g. java.lang.Object)
 		private readonly Modifiers modifiers;
 		private TypeFlags flags;
 		private MethodWrapper[] methods;
@@ -3187,11 +3187,13 @@ namespace IKVM.Internal
 #if !STATIC_COMPILER && !STUB_GENERATOR
 		internal void RunClassInit()
 		{
+#if !FIRST_PASS
 			Type t = IsRemapped ? TypeAsBaseType : TypeAsTBD;
 			if(t != null)
 			{
 				System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(t.TypeHandle);
 			}
+#endif
 		}
 #endif
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -65,13 +65,6 @@ jfieldID ni_bindsID;        /* NetworkInterface.bindings */
 jfieldID ni_nameID;         /* NetworkInterface.name */
 jfieldID ni_displayNameID;  /* NetworkInterface.displayName */
 jfieldID ni_childsID;       /* NetworkInterface.childs */
-jclass ni_iacls;            /* InetAddress */
-
-jclass ni_ia4cls;           /* Inet4Address */
-jmethodID ni_ia4Ctor;       /* Inet4Address() */
-
-jclass ni_ia6cls;           /* Inet6Address */
-jmethodID ni_ia6ctrID;      /* Inet6Address() */
 
 jclass ni_ibcls;            /* InterfaceAddress */
 jmethodID ni_ibctrID;       /* InterfaceAddress() */
@@ -286,7 +279,7 @@ int enumInterfaces(JNIEnv *env, netif **netifPP)
                 // But in rare case it fails, we allow 'char' to be displayed
                 curr->displayName = (char *)malloc(ifrowP->dwDescrLen + 1);
             } else {
-                curr->displayName = (wchar_t *)malloc(wlen*(sizeof(wchar_t))+1);
+                curr->displayName = (wchar_t *)malloc((wlen+1)*sizeof(wchar_t));
             }
 
             curr->name = (char *)malloc(strlen(dev_name) + 1);
@@ -294,6 +287,7 @@ int enumInterfaces(JNIEnv *env, netif **netifPP)
             if (curr->name == NULL || curr->displayName == NULL) {
                 if (curr->name) free(curr->name);
                 if (curr->displayName) free(curr->displayName);
+                free(curr);
                 curr = NULL;
             }
         }
@@ -328,7 +322,7 @@ int enumInterfaces(JNIEnv *env, netif **netifPP)
                 free(curr);
                 return -1;
             } else {
-                curr->displayName[wlen*(sizeof(wchar_t))] = '\0';
+                ((wchar_t *)curr->displayName)[wlen] = L'\0';
                 curr->dNameIsUnicode = TRUE;
             }
         }
@@ -515,26 +509,6 @@ Java_java_net_NetworkInterface_init(JNIEnv *env, jclass cls)
     CHECK_NULL(ni_childsID);
     ni_ctor = (*env)->GetMethodID(env, ni_class, "<init>", "()V");
     CHECK_NULL(ni_ctor);
-
-    ni_iacls = (*env)->FindClass(env, "java/net/InetAddress");
-    CHECK_NULL(ni_iacls);
-    ni_iacls = (*env)->NewGlobalRef(env, ni_iacls);
-    CHECK_NULL(ni_iacls);
-
-    ni_ia4cls = (*env)->FindClass(env, "java/net/Inet4Address");
-    CHECK_NULL(ni_ia4cls);
-    ni_ia4cls = (*env)->NewGlobalRef(env, ni_ia4cls);
-    CHECK_NULL(ni_ia4cls);
-    ni_ia4Ctor = (*env)->GetMethodID(env, ni_ia4cls, "<init>", "()V");
-    CHECK_NULL(ni_ia4Ctor);
-
-    ni_ia6cls = (*env)->FindClass(env, "java/net/Inet6Address");
-    CHECK_NULL(ni_ia6cls);
-    ni_ia6cls = (*env)->NewGlobalRef(env, ni_ia6cls);
-    CHECK_NULL(ni_ia6cls);
-    ni_ia6ctrID = (*env)->GetMethodID(env, ni_ia6cls, "<init>", "()V");
-    CHECK_NULL(ni_ia6ctrID);
-
     ni_ibcls = (*env)->FindClass(env, "java/net/InterfaceAddress");
     CHECK_NULL(ni_ibcls);
     ni_ibcls = (*env)->NewGlobalRef(env, ni_ibcls);
@@ -546,6 +520,9 @@ Java_java_net_NetworkInterface_init(JNIEnv *env, jclass cls)
     ni_ibbroadcastID = (*env)->GetFieldID(env, ni_ibcls, "broadcast", "Ljava/net/Inet4Address;");
     CHECK_NULL(ni_ibbroadcastID);
     ni_ibmaskID = (*env)->GetFieldID(env, ni_ibcls, "maskLength", "S");
+    CHECK_NULL(ni_ibmaskID);
+
+    initInetAddressIDs(env);
 }
 
 /*
@@ -591,7 +568,7 @@ jobject createNetworkInterface
             return NULL;
         }
     }
-    addrArr = (*env)->NewObjectArray(env, netaddrCount, ni_iacls, NULL);
+    addrArr = (*env)->NewObjectArray(env, netaddrCount, ia_class, NULL);
     if (addrArr == NULL) {
         free_netaddr(netaddrP);
         return NULL;
@@ -609,7 +586,7 @@ jobject createNetworkInterface
         jobject iaObj, ia2Obj;
         jobject ibObj = NULL;
         if (addrs->addr.him.sa_family == AF_INET) {
-            iaObj = (*env)->NewObject(env, ni_ia4cls, ni_ia4Ctor);
+            iaObj = (*env)->NewObject(env, ia4_class, ia4_ctrID);
             if (iaObj == NULL) {
                 free_netaddr(netaddrP);
                 return NULL;
@@ -617,6 +594,10 @@ jobject createNetworkInterface
             /* default ctor will set family to AF_INET */
 
             setInetAddress_addr(env, iaObj, ntohl(addrs->addr.him4.sin_addr.s_addr));
+            if ((*env)->ExceptionCheck(env)) {
+                free_netaddr(netaddrP);
+                return NULL;
+            }
             if (addrs->mask != -1) {
               ibObj = (*env)->NewObject(env, ni_ibcls, ni_ibctrID);
               if (ibObj == NULL) {
@@ -624,22 +605,27 @@ jobject createNetworkInterface
                 return NULL;
               }
               (*env)->SetObjectField(env, ibObj, ni_ibaddressID, iaObj);
-              ia2Obj = (*env)->NewObject(env, ni_ia4cls, ni_ia4Ctor);
+              ia2Obj = (*env)->NewObject(env, ia4_class, ia4_ctrID);
               if (ia2Obj == NULL) {
                 free_netaddr(netaddrP);
                 return NULL;
               }
               setInetAddress_addr(env, ia2Obj, ntohl(addrs->brdcast.him4.sin_addr.s_addr));
+              if ((*env)->ExceptionCheck(env)) {
+                  free_netaddr(netaddrP);
+                  return NULL;
+              }
               (*env)->SetObjectField(env, ibObj, ni_ibbroadcastID, ia2Obj);
               (*env)->SetShortField(env, ibObj, ni_ibmaskID, addrs->mask);
               (*env)->SetObjectArrayElement(env, bindsArr, bind_index++, ibObj);
             }
         } else /* AF_INET6 */ {
             int scope;
-            iaObj = (*env)->NewObject(env, ni_ia6cls, ni_ia6ctrID);
+            iaObj = (*env)->NewObject(env, ia6_class, ia6_ctrID);
             if (iaObj) {
                 int ret = setInet6Address_ipaddress(env, iaObj,  (jbyte *)&(addrs->addr.him6.sin6_addr.s6_addr));
                 if (ret == JNI_FALSE) {
+                    free_netaddr(netaddrP);
                     return NULL;
                 }
 
@@ -785,8 +771,9 @@ JNIEXPORT jobject JNICALL Java_java_net_NetworkInterface_getByInetAddress0
     (JNIEnv *env, jclass cls, jobject iaObj)
 {
     netif *ifList, *curr;
-    jint addr = getInetAddress_addr(env, iaObj);
     jobject netifObj = NULL;
+    jint addr = getInetAddress_addr(env, iaObj);
+    JNU_CHECK_EXCEPTION_RETURN(env, NULL);
 
     // Retained for now to support IPv4 only stack, java.net.preferIPv4Stack
     if (ipv6_available()) {
@@ -874,6 +861,7 @@ JNIEXPORT jobjectArray JNICALL Java_java_net_NetworkInterface_getAll
     /* allocate a NetworkInterface array */
     netIFArr = (*env)->NewObjectArray(env, count, cls, NULL);
     if (netIFArr == NULL) {
+        free_netif(ifList);
         return NULL;
     }
 
@@ -888,6 +876,7 @@ JNIEXPORT jobjectArray JNICALL Java_java_net_NetworkInterface_getAll
 
         netifObj = createNetworkInterface(env, curr, -1, NULL);
         if (netifObj == NULL) {
+            free_netif(ifList);
             return NULL;
         }
 

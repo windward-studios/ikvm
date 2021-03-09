@@ -86,6 +86,7 @@ static class ByteCodeHelperMethods
 	internal static readonly MethodInfo GetDelegateForInvokeBasic;
 	internal static readonly MethodInfo LoadMethodType;
 	internal static readonly MethodInfo LinkIndyCallSite;
+	internal static readonly MethodInfo isAlreadyInited;
 
 	static ByteCodeHelperMethods()
 	{
@@ -94,6 +95,7 @@ static class ByteCodeHelperMethods
 #else
 		Type typeofByteCodeHelper = typeof(IKVM.Runtime.ByteCodeHelper);
 #endif
+		isAlreadyInited = GetHelper(typeofByteCodeHelper, "isAlreadyInited");
 		multianewarray = GetHelper(typeofByteCodeHelper, "multianewarray");
 		multianewarray_ghost = GetHelper(typeofByteCodeHelper, "multianewarray_ghost");
 		anewarray_ghost = GetHelper(typeofByteCodeHelper, "anewarray_ghost");
@@ -277,6 +279,8 @@ sealed class Compiler
 	private static readonly MethodInfo keepAliveMethod;
 	internal static readonly MethodWrapper getClassFromTypeHandle;
 	internal static readonly MethodWrapper getClassFromTypeHandle2;
+	private string methname;
+	private string clazzname;
 	private readonly DynamicTypeWrapper.FinishContext context;
 	private readonly DynamicTypeWrapper clazz;
 	private readonly MethodWrapper mw;
@@ -730,6 +734,8 @@ sealed class Compiler
 
 	internal static void Compile(DynamicTypeWrapper.FinishContext context, TypeWrapper host, DynamicTypeWrapper clazz, MethodWrapper mw, ClassFile classFile, ClassFile.Method m, CodeEmitter ilGenerator, ref bool nonleaf)
 	{
+		string clazzname = classFile.Name;
+		string methname = m.Name;
 		ClassLoaderWrapper classLoader = clazz.GetClassLoader();
 		if(classLoader.EmitDebugInfo)
 		{
@@ -765,6 +771,8 @@ sealed class Compiler
 			try
 			{
 				c = new Compiler(context, host, clazz, mw, classFile, m, ilGenerator, classLoader);
+				c.clazzname = clazzname;
+				c.methname = methname;
 			}
 			finally
 			{
@@ -774,7 +782,7 @@ sealed class Compiler
 		catch(VerifyError x)
 		{
 #if STATIC_COMPILER
-			classLoader.IssueMessage(Message.EmittedVerificationError, classFile.Name + "." + m.Name + m.Signature, x.Message);
+			classLoader.IssueMessage(Message.EmittedVerificationError, clazzname + "." + methname + m.Signature, x.Message);
 #endif
 			Tracer.Error(Tracer.Verifier, x.ToString());
 			clazz.SetHasVerifyError();
@@ -786,7 +794,7 @@ sealed class Compiler
 		catch(ClassFormatError x)
 		{
 #if STATIC_COMPILER
-			classLoader.IssueMessage(Message.EmittedClassFormatError, classFile.Name + "." + m.Name + m.Signature, x.Message);
+			classLoader.IssueMessage(Message.EmittedClassFormatError, clazzname + "." + methname + m.Signature, x.Message);
 #endif
 			Tracer.Error(Tracer.Verifier, x.ToString());
 			clazz.SetHasClassFormatError();
@@ -794,6 +802,15 @@ sealed class Compiler
 			return;
 		}
 		Profiler.Enter("Compile");
+		if(methname == "<clinit>"){
+			//FIXBUG: repeated class initialization
+			ilGenerator.Emit(OpCodes.Ldstr, clazzname);
+			ilGenerator.Emit(OpCodes.Call, ByteCodeHelperMethods.isAlreadyInited);
+			CodeEmitterLabel codeEmitterLabel = ilGenerator.DefineLabel();
+			ilGenerator.EmitBrfalse(codeEmitterLabel);
+			ilGenerator.Emit(OpCodes.Ret);
+			ilGenerator.MarkLabel(codeEmitterLabel);
+		}
 		try
 		{
 			if(m.IsSynchronized && m.IsStatic)
@@ -820,7 +837,6 @@ sealed class Compiler
 				c.Compile(b, 0);
 				b.Leave();
 			}
-			nonleaf = true;
 		}
 		finally
 		{
@@ -1319,10 +1335,17 @@ sealed class Compiler
 				case NormalizedByteCode.__getstatic:
 				{
 					ClassFile.ConstantPoolItemFieldref cpi = classFile.GetFieldref(instr.Arg1);
-					if(cpi.GetClassType() != clazz)
+					TypeWrapper fuckingTypeWrapper = cpi.GetClassType();
+					if(fuckingTypeWrapper != clazz)
 					{
 						// we may trigger a static initializer, which is equivalent to a call
-						nonleaf = true;
+						// HACK: We don't need to worry about static initializers, if they don't exist.
+						#if STATIC_COMPILER || FIRST_PASS
+						nonleaf |= fuckingTypeWrapper.HasStaticInitializer;
+						#else
+						nonleaf |= fuckingTypeWrapper.HasStaticInitializer && !IKVM.Runtime.ByteCodeHelper.isNonLeafInit(fuckingTypeWrapper.Name);
+						#endif
+						
 					}
 					FieldWrapper field = cpi.GetField();
 					field.EmitGet(ilGenerator);
@@ -1353,10 +1376,12 @@ sealed class Compiler
 				case NormalizedByteCode.__putstatic:
 				{
 					ClassFile.ConstantPoolItemFieldref cpi = classFile.GetFieldref(instr.Arg1);
-					if(cpi.GetClassType() != clazz)
+					TypeWrapper fuckingTypeWrapper = cpi.GetClassType();
+					if(fuckingTypeWrapper != clazz)
 					{
 						// we may trigger a static initializer, which is equivalent to a call
-						nonleaf = true;
+						// HACK: We don't need to worry about static initializers, if they don't exist.
+						nonleaf |= fuckingTypeWrapper.HasStaticInitializer;
 					}
 					FieldWrapper field = cpi.GetField();
 					TypeWrapper tw = field.FieldTypeWrapper;
@@ -2241,20 +2266,12 @@ sealed class Compiler
 					ilGenerator.EmitBrfalse(block.GetLabel(instr.TargetIndex));
 					break;
 				case NormalizedByteCode.__if_acmpeq:
-				#if STATIC_COMPILER
-					ilGenerator.EmitBeq(block.GetLabel(instr.TargetIndex));
-				#else
-					ilGenerator.Emit(OpCodes.Call, Helper.ObjectCheckRefEqual);
+					ilGenerator.Emit(OpCodes.Call, CodeEmitter.RefEq);
 					ilGenerator.EmitBrtrue(block.GetLabel(instr.TargetIndex));
-				#endif
 					break;
 				case NormalizedByteCode.__if_acmpne:
-				#if STATIC_COMPILER
-					ilGenerator.EmitBne_Un(block.GetLabel(instr.TargetIndex));
-				#else
-					ilGenerator.Emit(OpCodes.Call, Helper.ObjectCheckRefEqual);
+					ilGenerator.Emit(OpCodes.Call, CodeEmitter.RefEq);
 					ilGenerator.EmitBrfalse(block.GetLabel(instr.TargetIndex));
-				#endif
 					break;
 				case NormalizedByteCode.__goto:
 				case NormalizedByteCode.__goto_finally:
@@ -2767,7 +2784,7 @@ sealed class Compiler
 						ClassLoaderWrapper.LoadClassCritical("java.lang.IncompatibleClassChangeError").GetMethodWrapper("<init>", "()V", false).EmitNewobj(ilGenerator);
 					}
 					string message = harderrors[instr.HardErrorMessageId];
-					Tracer.Error(Tracer.Compiler, "{0}: {1}\n\tat {2}.{3}{4}", exceptionType.Name, message, classFile.Name, m.Name, m.Signature);
+					Tracer.Error(Tracer.Compiler, "{0}: {1}\n\tat {2}.{3}{4}", exceptionType.Name, message, clazzname, methname, m.Signature);
 					ilGenerator.Emit(OpCodes.Ldstr, message);
 					MethodWrapper method = exceptionType.GetMethodWrapper("<init>", "(Ljava.lang.String;)V", false);
 					method.Link();
@@ -2876,7 +2893,7 @@ sealed class Compiler
 	}
 	private void EmitGlobalConstantPoolAccess(CodeEmitter ilgen, int constant, object obj){
 		#if !STATIC_COMPILER
-		string index = classFile.Name + "@" + constant.ToString();
+		string index = clazzname + "@" + constant.ToString();
 		int GlobalConstantIndex = Helper.GlobalConstantPoolIndexer.GetOrAdd(index, GetGlobalConstantPoolIndexerAtomic);
 		Helper.GlobalConstantPool.TryAdd(new SelfHashingInteger(GlobalConstantIndex), obj);
 		ilgen.EmitLdc_I4(GlobalConstantIndex);

@@ -632,4 +632,9 @@ public static class Java_sun_net_ExtendedOptionsImpl
 		// We don't support this. Solaris only functionality.
 		return false;
 	}
+	
+	public static bool keepAliveOptionsSupported()
+	{
+		return false; //WILL IMPLEMENT IN THE FUTURE!
+	}
 }

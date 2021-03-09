@@ -104,6 +104,8 @@ namespace IKVM.Internal
 		private static readonly MethodInfo verboseCastFailure = JVM.SafeGetEnvironmentVariable("IKVM_VERBOSE_CAST") == null ? null : ByteCodeHelperMethods.VerboseCastFailure;
 		private static readonly MethodInfo monitorEnter = JVM.Import(typeof(System.Threading.Monitor)).GetMethod("Enter", BindingFlags.Public | BindingFlags.Static, null, new Type[] { Types.Object }, null);
 		private static readonly MethodInfo monitorExit = JVM.Import(typeof(System.Threading.Monitor)).GetMethod("Exit", BindingFlags.Public | BindingFlags.Static, null, new Type[] { Types.Object }, null);
+		internal static readonly MethodInfo RefEq = JVM.Import(typeof(object)).GetMethod("ReferenceEquals", BindingFlags.Public | BindingFlags.Static, null, new Type[] { Types.Object, Types.Object }, null);
+
 		private static bool experimentalOptimizations {
 			get {
 				return Helper.experimentalOptimizations;

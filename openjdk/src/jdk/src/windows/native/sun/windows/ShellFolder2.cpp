@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -192,14 +192,19 @@ static BOOL initShellProcs()
 static jstring jstringFromSTRRET(JNIEnv* env, LPITEMIDLIST pidl, STRRET* pStrret) {
     switch (pStrret->uType) {
         case STRRET_CSTR :
-            return JNU_NewStringPlatform(env, reinterpret_cast<const char*>(pStrret->cStr));
+            if (pStrret->cStr != NULL) {
+                return JNU_NewStringPlatform(env, reinterpret_cast<const char*>(pStrret->cStr));
+            }
+            break;
         case STRRET_OFFSET :
             // Note : this may need to be WCHAR instead
             return JNU_NewStringPlatform(env,
                                          (CHAR*)pidl + pStrret->uOffset);
         case STRRET_WSTR :
-            return env->NewString(reinterpret_cast<const jchar*>(pStrret->pOleStr),
-                static_cast<jsize>(wcslen(pStrret->pOleStr)));
+            if (pStrret->pOleStr != NULL) {
+                return env->NewString(reinterpret_cast<const jchar*>(pStrret->pOleStr),
+                    static_cast<jsize>(wcslen(pStrret->pOleStr)));
+            }
     }
     return NULL;
 }
@@ -673,6 +678,9 @@ JNIEXPORT jlong JNICALL Java_sun_awt_shell_Win32ShellFolder2_getLinkLocation
       case STRRET_WSTR :
         wstr = strret.pOleStr;
         break;
+
+      default:
+        return NULL;
     }
 
     IShellLinkW* psl;
@@ -684,7 +692,7 @@ JNIEXPORT jlong JNICALL Java_sun_awt_shell_Win32ShellFolder2_getLinkLocation
             hres = ppf->Load(wstr, STGM_READ);
             if (SUCCEEDED(hres)) {
                 if (resolve) {
-                    hres = psl->Resolve(NULL, 0);
+                    hres = psl->Resolve(NULL, SLR_NO_UI);
                     // Ignore failure
                 }
                 pidl = (LPITEMIDLIST)NULL;

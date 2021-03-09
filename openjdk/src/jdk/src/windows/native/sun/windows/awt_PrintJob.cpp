@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -521,12 +521,18 @@ Java_sun_awt_windows_WPageDialogPeer__1show(JNIEnv *env, jobject peer)
     AwtComponent *awtParent = (parent != NULL) ? (AwtComponent *)JNI_GET_PDATA(parent) : NULL;
     HWND hwndOwner = awtParent ? awtParent->GetHWnd() : NULL;
 
+
     jboolean doIt = JNI_FALSE; // Assume the user will cancel the dialog.
     PAGESETUPDLG setup;
     memset(&setup, 0, sizeof(setup));
 
     setup.lStructSize = sizeof(setup);
 
+    HWND parentID = AwtPrintControl::getParentID(env, self);
+    if (parentID != NULL && ::IsWindow(parentID)) {
+        // windows native modality is requested (used by JavaFX).
+        setup.hwndOwner = parentID;
+    }
     /*
       Fix for 6488834.
       To disable Win32 native parent modality we have to set
@@ -534,7 +540,7 @@ Java_sun_awt_windows_WPageDialogPeer__1show(JNIEnv *env, jobject peer)
       parentless dialogs we use NULL to show them in the taskbar,
       and for all other dialogs AwtToolkit's HWND is used.
     */
-    if (awtParent != NULL)
+    else if (awtParent != NULL)
     {
         setup.hwndOwner = AwtToolkit::GetInstance().GetHWnd();
     }
@@ -1108,7 +1114,7 @@ Java_sun_awt_windows_WPrinterJob_initPrinter(JNIEnv *env, jobject self) {
     // check for collation
     HGLOBAL hDevNames = AwtPrintControl::getPrintHDName(env, self);
     if (hDevNames != NULL) {
-        DWORD dmFields;
+        DWORD dmFields = 0;
         DEVNAMES *devnames = (DEVNAMES *)::GlobalLock(hDevNames);
 
         if (devnames != NULL) {
